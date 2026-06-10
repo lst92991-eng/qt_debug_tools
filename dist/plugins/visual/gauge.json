@@ -1,0 +1,10 @@
+{
+  "type": "visual",
+  "name": "Gauge",
+  "version": "1.0.0",
+  "interface": "IVisualPlugin",
+  "author": "MCU Debug Tool",
+  "description": "Gauge panel for the latest numeric channel value.",
+  "platforms": ["windows", "linux", "macos"],
+  "priority": 40
+}

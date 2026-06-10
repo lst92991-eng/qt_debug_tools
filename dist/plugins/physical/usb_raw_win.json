@@ -1,0 +1,10 @@
+{
+  "type": "physical",
+  "name": "USB Raw (Windows)",
+  "version": "1.0.0",
+  "interface": "IPhysicalPlugin",
+  "author": "MCU Debug Tool",
+  "description": "Windows USB raw bulk transfer via WinUSB device interface GUID.",
+  "platforms": ["windows"],
+  "priority": 70
+}

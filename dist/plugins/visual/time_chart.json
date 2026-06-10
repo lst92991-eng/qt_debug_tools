@@ -1,0 +1,10 @@
+{
+  "type": "visual",
+  "name": "Time Chart",
+  "version": "1.0.0",
+  "interface": "IVisualPlugin",
+  "author": "MCU Debug Tool",
+  "description": "Lightweight time-series chart for numeric channel data.",
+  "platforms": ["windows", "linux", "macos"],
+  "priority": 50
+}

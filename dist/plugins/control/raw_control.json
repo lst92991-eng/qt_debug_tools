@@ -1,0 +1,10 @@
+{
+  "type": "control",
+  "name": "Raw Control",
+  "version": "1.0.0",
+  "interface": "IControlPlugin",
+  "author": "MCU Debug Tool",
+  "description": "Hex command input with validation, history, periodic send, and quick-send presets.",
+  "platforms": ["windows", "linux", "macos"],
+  "priority": 100
+}

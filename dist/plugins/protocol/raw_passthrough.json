@@ -1,0 +1,10 @@
+{
+  "type": "protocol",
+  "name": "Raw Protocol",
+  "version": "1.0.0",
+  "interface": "IProtocolPlugin",
+  "author": "MCU Debug Tool",
+  "description": "Pass-through protocol that publishes raw bytes as channel 0 frames.",
+  "platforms": ["windows", "linux", "macos"],
+  "priority": 100
+}

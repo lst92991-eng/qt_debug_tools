@@ -1,0 +1,10 @@
+{
+  "type": "protocol",
+  "name": "CAN Frame",
+  "version": "1.0.0",
+  "interface": "IProtocolPlugin",
+  "author": "MCU Debug Tool",
+  "description": "Simple CAN/CAN-FD frame protocol using CAFD + id + dlc + payload framing.",
+  "platforms": ["windows", "linux", "macos"],
+  "priority": 60
+}

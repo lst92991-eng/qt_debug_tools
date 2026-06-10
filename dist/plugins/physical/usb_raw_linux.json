@@ -1,0 +1,10 @@
+{
+  "type": "physical",
+  "name": "USB Raw (Linux)",
+  "version": "1.0.0",
+  "interface": "IPhysicalPlugin",
+  "author": "MCU Debug Tool",
+  "description": "Raw USB bulk transfer via libusb on Linux.",
+  "platforms": ["linux"],
+  "priority": 100
+}

@@ -1,0 +1,10 @@
+{
+  "type": "visual",
+  "name": "Raw Viewer",
+  "version": "1.0.0",
+  "interface": "IVisualPlugin",
+  "author": "MCU Debug Tool",
+  "description": "Hex and ASCII packet viewer with timestamps, filtering, pause, clear, and detail dump.",
+  "platforms": ["windows", "linux", "macos"],
+  "priority": 100
+}
