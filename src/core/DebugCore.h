@@ -20,6 +20,9 @@ public:
     void initialize();
     void publish(const DataFrame& frame);
     void sendCommand(const QVariantMap& command);
+    QVariantMap channelMetadata() const;
+    void setChannelMetadata(quint16 channel, const QString& name, const QString& unit);
+    void setChannelMetadata(const QVariantMap& metadata);
 
 signals:
     void framePublished(const DataFrame& frame);
@@ -33,6 +36,7 @@ private:
     PluginManager m_pluginMgr;
     ChannelHub m_channelHub;
     RingBufferPool m_ringPool;
+    QVariantMap m_channelMetadata;
     QMetaObject::Connection m_physicalDataConnection;
     QMetaObject::Connection m_physicalErrorConnection;
     QMetaObject::Connection m_protocolFrameConnection;

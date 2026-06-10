@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QMetaType>
+#include <QString>
 #include <QVariantMap>
 #include <QVector>
 
@@ -15,6 +16,8 @@ enum class FrameDirection {
 struct ChannelSample {
     quint16 index = 0;
     double value = std::numeric_limits<double>::quiet_NaN();
+    QString name;
+    QString unit;
 };
 
 struct DataFrame {

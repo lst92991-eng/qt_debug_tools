@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QList>
 #include <QReadWriteLock>
+#include <QString>
 #include <QVector>
 
 struct TimedSample {
@@ -30,6 +31,9 @@ public:
     QVector<TimedSample> replay(quint16 channelIdx, qint64 from_us) const;
     qint64 newestTimestamp(quint16 channelIdx) const;
     QList<quint16> activeChannels() const;
+    bool saveToFile(const QString& path, QString* errorMessage = nullptr) const;
+    bool loadFromFile(const QString& path, QString* errorMessage = nullptr);
+    void clear();
 
 private:
     int m_defaultCapacity;

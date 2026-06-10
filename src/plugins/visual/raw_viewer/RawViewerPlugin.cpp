@@ -271,7 +271,8 @@ QString RawViewerPlugin::formatTimestamp(qint64 timestamp_us) const
 
 QString RawViewerPlugin::formatHex(const QByteArray& payload, int maxBytes) const
 {
-    const int count = maxBytes < 0 ? payload.size() : std::min(payload.size(), maxBytes);
+    const int size = static_cast<int>(payload.size());
+    const int count = maxBytes < 0 ? size : std::min(size, maxBytes);
     QStringList parts;
     parts.reserve(count + 1);
     for (int i = 0; i < count; ++i) {
@@ -287,7 +288,8 @@ QString RawViewerPlugin::formatHex(const QByteArray& payload, int maxBytes) cons
 
 QString RawViewerPlugin::formatAscii(const QByteArray& payload, int maxBytes) const
 {
-    const int count = maxBytes < 0 ? payload.size() : std::min(payload.size(), maxBytes);
+    const int size = static_cast<int>(payload.size());
+    const int count = maxBytes < 0 ? size : std::min(size, maxBytes);
     QString ascii;
     ascii.reserve(count + (payload.size() > count ? 3 : 0));
     for (int i = 0; i < count; ++i) {

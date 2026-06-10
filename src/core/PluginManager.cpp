@@ -17,8 +17,23 @@ PluginManager::PluginManager(QObject* parent)
 
 PluginManager::~PluginManager()
 {
+    clear();
+}
+
+void PluginManager::clear()
+{
     deactivateAll();
+    m_physicalPlugins.clear();
+    m_protocolPlugins.clear();
+    m_visualPlugins.clear();
+    m_controlPlugins.clear();
+    for (LoadedPlugin* loaded : std::as_const(m_loaded)) {
+        if (loaded->loader) {
+            loaded->loader->unload();
+        }
+    }
     qDeleteAll(m_loaded);
+    m_loaded.clear();
 }
 
 void PluginManager::scanPlugins(const QString& pluginDir)

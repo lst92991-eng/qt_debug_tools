@@ -58,14 +58,32 @@ void DebugCore::initialize()
 
 void DebugCore::publish(const DataFrame& frame)
 {
-    for (const ChannelSample& sample : frame.channels) {
+    DataFrame enriched = frame;
+    for (ChannelSample& sample : enriched.channels) {
+        const QString key = QString::number(sample.index);
+        const QVariantMap existing = m_channelMetadata.value(key).toMap();
+        if (!existing.isEmpty()) {
+            if (sample.name.isEmpty()) {
+                sample.name = existing.value(QStringLiteral("name")).toString();
+            }
+            if (sample.unit.isEmpty()) {
+                sample.unit = existing.value(QStringLiteral("unit")).toString();
+            }
+        }
+
+        if (!sample.name.isEmpty() || !sample.unit.isEmpty()) {
+            QVariantMap meta;
+            meta.insert(QStringLiteral("name"), sample.name);
+            meta.insert(QStringLiteral("unit"), sample.unit);
+            m_channelMetadata.insert(key, meta);
+        }
         if (!std::isnan(sample.value)) {
-            m_ringPool.push(sample.index, {frame.timestamp_us, sample.value});
+            m_ringPool.push(sample.index, {enriched.timestamp_us, sample.value});
         }
     }
 
-    m_channelHub.dispatch(frame);
-    emit framePublished(frame);
+    m_channelHub.dispatch(enriched);
+    emit framePublished(enriched);
 }
 
 void DebugCore::sendCommand(const QVariantMap& command)
@@ -105,6 +123,24 @@ void DebugCore::sendCommand(const QVariantMap& command)
     publish(txFrame);
 
     emit commandSent(bytes);
+}
+
+QVariantMap DebugCore::channelMetadata() const
+{
+    return m_channelMetadata;
+}
+
+void DebugCore::setChannelMetadata(quint16 channel, const QString& name, const QString& unit)
+{
+    QVariantMap meta;
+    meta.insert(QStringLiteral("name"), name);
+    meta.insert(QStringLiteral("unit"), unit);
+    m_channelMetadata.insert(QString::number(channel), meta);
+}
+
+void DebugCore::setChannelMetadata(const QVariantMap& metadata)
+{
+    m_channelMetadata = metadata;
 }
 
 void DebugCore::wireDataPath()

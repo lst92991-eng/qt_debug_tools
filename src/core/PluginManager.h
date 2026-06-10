@@ -19,6 +19,7 @@ public:
     explicit PluginManager(QObject* parent = nullptr);
     ~PluginManager() override;
 
+    void clear();
     void scanPlugins(const QString& pluginDir);
 
     QList<IPhysicalPlugin*> physicalPlugins() const;

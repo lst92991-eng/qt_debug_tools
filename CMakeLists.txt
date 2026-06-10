@@ -52,13 +52,18 @@ add_executable(mcd_app
     src/app/main.cpp
 )
 target_link_libraries(mcd_app PRIVATE mcd_core Qt6::Core Qt6::Widgets Qt6::SerialPort)
+add_custom_command(TARGET mcd_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:Qt6::SerialPort>"
+        "$<TARGET_FILE_DIR:mcd_app>"
+)
 
 function(mcd_add_plugin target category)
     add_library(${target} MODULE ${ARGN})
     target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(${target} PRIVATE mcd_sdk Qt6::Core Qt6::Widgets)
 
-    set(plugin_output_dir "${MCD_OUTPUT_DIR}/plugins/${category}")
+    set(plugin_output_dir "${MCD_OUTPUT_DIR}/$<CONFIG>/plugins/${category}")
     set_target_properties(${target} PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${plugin_output_dir}"
         RUNTIME_OUTPUT_DIRECTORY "${plugin_output_dir}"
@@ -101,10 +106,25 @@ if(UNIX)
     endif()
 endif()
 
+mcd_add_plugin(usb_raw_win physical
+    src/plugins/physical/usb_raw_win/UsbRawWinPlugin.cpp
+    src/plugins/physical/usb_raw_win/UsbRawWinPlugin.h
+    src/plugins/physical/usb_raw_win/usb_raw_win.json
+)
+if(WIN32)
+    target_link_libraries(usb_raw_win PRIVATE setupapi winusb)
+endif()
+
 mcd_add_plugin(raw_passthrough protocol
     src/plugins/protocol/raw_passthrough/RawPassthroughPlugin.cpp
     src/plugins/protocol/raw_passthrough/RawPassthroughPlugin.h
     src/plugins/protocol/raw_passthrough/raw_passthrough.json
+)
+
+mcd_add_plugin(can_frame protocol
+    src/plugins/protocol/can_frame/CanFramePlugin.cpp
+    src/plugins/protocol/can_frame/CanFramePlugin.h
+    src/plugins/protocol/can_frame/can_frame.json
 )
 
 mcd_add_plugin(raw_viewer visual
@@ -113,8 +133,26 @@ mcd_add_plugin(raw_viewer visual
     src/plugins/visual/raw_viewer/raw_viewer.json
 )
 
+mcd_add_plugin(time_chart visual
+    src/plugins/visual/time_chart/TimeChartPlugin.cpp
+    src/plugins/visual/time_chart/TimeChartPlugin.h
+    src/plugins/visual/time_chart/time_chart.json
+)
+
+mcd_add_plugin(gauge visual
+    src/plugins/visual/gauge/GaugePlugin.cpp
+    src/plugins/visual/gauge/GaugePlugin.h
+    src/plugins/visual/gauge/gauge.json
+)
+
 mcd_add_plugin(raw_control control
     src/plugins/control/raw_control/RawControlPlugin.cpp
     src/plugins/control/raw_control/RawControlPlugin.h
     src/plugins/control/raw_control/raw_control.json
+)
+
+mcd_add_plugin(slider_widget control
+    src/plugins/control/slider_widget/SliderWidgetPlugin.cpp
+    src/plugins/control/slider_widget/SliderWidgetPlugin.h
+    src/plugins/control/slider_widget/slider_widget.json
 )

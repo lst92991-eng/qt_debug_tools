@@ -1,0 +1,10 @@
+{
+  "type": "control",
+  "name": "Slider Widget",
+  "version": "1.0.0",
+  "interface": "IControlPlugin",
+  "author": "MCU Debug Tool",
+  "description": "Slider-based numeric command panel with live send mode.",
+  "platforms": ["windows", "linux", "macos"],
+  "priority": 40
+}

@@ -14,6 +14,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
 
 private:
     void buildUi();
@@ -22,6 +23,14 @@ private:
     void configureSelectedPhysical();
     void connectDevice();
     void disconnectDevice();
+    void saveSession();
+    void loadSession();
+    void saveHistory();
+    void loadHistory();
+    void clearHistory();
+    void editChannelMap();
+    void scanSerialBaudRates();
+    void detachPluginPages();
     void setConnected(bool connected);
     IPhysicalPlugin* selectedPhysical() const;
     IProtocolPlugin* selectedProtocol() const;
