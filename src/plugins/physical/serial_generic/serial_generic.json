@@ -1,0 +1,10 @@
+{
+  "type": "physical",
+  "name": "Serial (Generic)",
+  "version": "1.0.0",
+  "interface": "IPhysicalPlugin",
+  "author": "MCU Debug Tool",
+  "description": "Generic serial transport using QSerialPort.",
+  "platforms": ["windows", "linux", "macos"],
+  "priority": 80
+}

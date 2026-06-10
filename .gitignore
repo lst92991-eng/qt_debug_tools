@@ -1,0 +1,15 @@
+build*/
+out/
+.qt/
+CMakeUserPresets.json
+*.user
+*.autosave
+*.log
+*.obj
+*.o
+*.lib
+*.a
+*.dll
+*.so
+*.dylib
+*.exe
