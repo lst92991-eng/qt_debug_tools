@@ -28,6 +28,7 @@ public:
     qint64 historyFrom() override;
     QString name() const override;
     void clearHistory() override;
+    void clearNumericHistory() override {} // Loading numeric history must not erase packet evidence.
 private:
     void buildUi();
     void flushPending();

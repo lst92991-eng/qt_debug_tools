@@ -30,6 +30,7 @@ public:
     bool loadFromFile(const QString& path, QString* errorMessage = nullptr);
     void clear();
 private:
+    void rebalance(); // Caller holds the write lock; discard oldest samples, not new input.
     int m_defaultCapacity;
     int m_totalSamples = 0;
     QHash<ChannelId, RingBuffer> m_buffers;

@@ -14,5 +14,6 @@ public:
     virtual qint64 historyFrom() = 0;
     virtual QString name() const = 0;
     virtual void clearHistory() {}
+    virtual void clearNumericHistory() { clearHistory(); }
 };
 Q_DECLARE_INTERFACE(IVisualPlugin, IVisualPlugin_iid)

@@ -46,18 +46,44 @@ qint64 RingBuffer::newestTimestamp() const
 }
 RingBufferPool::RingBufferPool(int defaultCapacity)
     : m_defaultCapacity(std::clamp(defaultCapacity, 1, MaxCapacity)) {}
+void RingBufferPool::rebalance()
+{
+    const int fairCapacity = MaxTotalSamples / std::max(1, int(m_buffers.size()));
+    m_totalSamples = 0;
+    for (auto it = m_buffers.begin(); it != m_buffers.end(); ++it) {
+        const int limit = std::min(it->capacity, fairCapacity);
+        if (it->capacity > limit) {
+            const auto ordered = it->range(std::numeric_limits<qint64>::min(), 0);
+            RingBuffer replacement;
+            replacement.capacity = limit;
+            replacement.data.reserve(std::min(limit, int(ordered.size())));
+            for (qsizetype i = std::max<qsizetype>(0, ordered.size() - limit); i < ordered.size(); ++i)
+                replacement.push(ordered.at(i));
+            *it = std::move(replacement);
+        }
+        m_totalSamples += it->sampleCount;
+    }
+}
 bool RingBufferPool::push(ChannelId channelIdx, TimedSample sample)
 {
-    if (!std::isfinite(sample.value)) return false;
+    if (!std::isfinite(sample.value) || sample.timestamp_us < 0) return false;
     QWriteLocker locker(&m_lock);
     auto it = m_buffers.find(channelIdx);
     if (it == m_buffers.end()) {
-        if (m_buffers.size() >= MaxChannels || m_totalSamples >= MaxTotalSamples) return false;
+        if (m_buffers.size() >= MaxChannels) return false;
         RingBuffer buffer;
         buffer.capacity = m_defaultCapacity;
-        it = m_buffers.insert(channelIdx, std::move(buffer));
+        m_buffers.insert(channelIdx, std::move(buffer));
+        rebalance();
+        it = m_buffers.find(channelIdx);
     }
-    const bool grows = it->data.size() < it->capacity;
+    if (it->sampleCount < it->capacity && m_totalSamples >= MaxTotalSamples) {
+        // A loaded legacy file can have a different allocation. Make it a rolling
+        // history again instead of freezing reception when its quota is reached.
+        rebalance();
+        it = m_buffers.find(channelIdx);
+    }
+    const bool grows = it->sampleCount < it->capacity;
     if (grows && m_totalSamples >= MaxTotalSamples) return false;
     it->push(sample);
     if (grows) ++m_totalSamples;
@@ -135,7 +161,7 @@ bool RingBufferPool::loadFromFile(const QString& path, QString* error)
         for (quint32 j = 0; j < count; ++j) {
             TimedSample sample;
             in >> sample.timestamp_us >> sample.value;
-            if (in.status() != QDataStream::Ok || !std::isfinite(sample.value))
+            if (in.status() != QDataStream::Ok || !std::isfinite(sample.value) || sample.timestamp_us < 0)
                 return fail(error, QStringLiteral("Invalid or truncated history sample"));
             buffer.push(sample);
         }
