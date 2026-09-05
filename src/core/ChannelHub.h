@@ -13,12 +13,12 @@ class ChannelHub : public QObject {
 public:
     explicit ChannelHub(QObject* parent = nullptr);
 
-    void subscribe(IVisualPlugin* plugin, const QList<quint16>& channels);
+    void subscribe(IVisualPlugin* plugin, const QList<ChannelId>& channels);
     void unsubscribe(IVisualPlugin* plugin);
     void dispatch(const DataFrame& frame);
 
 private:
-    QHash<quint16, QSet<IVisualPlugin*>> m_subscriptions;
+    QHash<ChannelId, QSet<IVisualPlugin*>> m_subscriptions;
     QSet<IVisualPlugin*> m_wildcardSubscribers;
     QHash<IVisualPlugin*, QMetaObject::Connection> m_destroyConnections;
 };
