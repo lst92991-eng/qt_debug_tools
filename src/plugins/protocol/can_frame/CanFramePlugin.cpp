@@ -108,7 +108,7 @@ void CanFramePlugin::parseBuffer()
             | static_cast<quint8>(m_buffer.at(5));
         const int dlc = static_cast<quint8>(m_buffer.at(6));
         if (dlc > 64) {
-            // Drop one byte, not the whole candidate header, so the next CA FD can be found.
+            // Drop one byte, then rescan so the next CA FD header is recoverable.
             m_buffer.remove(0, 1);
             continue;
         }
@@ -127,16 +127,16 @@ void CanFramePlugin::parseBuffer()
         frame.attributes.insert(QStringLiteral("dlc"), dlc);
         frame.attributes.insert(QStringLiteral("is_fd"), dlc > 8);
 
+        // Shift by six bits because a CAN-FD payload has at most 64 byte positions.
+        // ChannelId is 64-bit, so the full incoming identifier is preserved.
+        const ChannelId channelBase = static_cast<ChannelId>(canId) << 6;
         for (int i = 0; i < payload.size(); ++i) {
             ChannelSample sample;
-            sample.index = static_cast<quint16>((canId & 0x7ff) * 64 + i);
+            sample.index = channelBase | static_cast<ChannelId>(i);
             sample.value = static_cast<quint8>(payload.at(i));
             sample.name = QStringLiteral("CAN%1[%2]").arg(canId, 0, 16).arg(i).toUpper();
             sample.unit = QStringLiteral("byte");
             frame.channels.push_back(sample);
-        }
-        if (frame.channels.isEmpty()) {
-            frame.channels = {{static_cast<quint16>(canId & 0xffff), std::numeric_limits<double>::quiet_NaN()}};
         }
         emit frameParsed(frame);
     }
