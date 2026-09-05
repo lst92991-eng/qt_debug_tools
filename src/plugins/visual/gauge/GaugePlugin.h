@@ -14,7 +14,7 @@ public:
     explicit GaugePlugin(QWidget* parent = nullptr);
 
     void onChannelData(const DataFrame& frame) override;
-    QList<quint16> subscribedChannels() override;
+    QList<ChannelId> subscribedChannels() override;
     qint64 historyFrom() override;
     QString name() const override;
 
@@ -23,9 +23,9 @@ protected:
 
 private:
     void rebuildSelector();
-    quint16 selectedChannel() const;
+    ChannelId selectedChannel() const;
 
     QComboBox* m_selector = nullptr;
-    QHash<quint16, double> m_values;
-    QHash<quint16, QString> m_labels;
+    QHash<ChannelId, double> m_values;
+    QHash<ChannelId, QString> m_labels;
 };
