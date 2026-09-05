@@ -17,6 +17,10 @@ public:
     virtual void feedBytes(const QByteArray& raw) = 0;
     virtual QByteArray encodeCommand(const QVariantMap& command) = 0;
 
+    // Clear parser/session state when a transport session starts, ends, or changes.
+    // Stateless protocols may keep the default no-op implementation.
+    virtual void reset() {}
+
     virtual QString name() const = 0;
     virtual QString version() const = 0;
 
