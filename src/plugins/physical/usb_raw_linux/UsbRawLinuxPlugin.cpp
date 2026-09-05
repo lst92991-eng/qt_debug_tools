@@ -2,6 +2,8 @@
 
 #include <QRegularExpression>
 
+#include <algorithm>
+
 UsbRawLinuxPlugin::UsbRawLinuxPlugin(QObject* parent)
     : IPhysicalPlugin(parent)
 {
@@ -22,7 +24,7 @@ bool UsbRawLinuxPlugin::open(const QVariantMap& config)
     const int pid = parseHexInt(config.value(QStringLiteral("pid"), defaults.value(QStringLiteral("pid"))), 0);
     m_epOut = parseHexInt(config.value(QStringLiteral("ep_out"), defaults.value(QStringLiteral("ep_out"))), 0x01);
     m_epIn = parseHexInt(config.value(QStringLiteral("ep_in"), defaults.value(QStringLiteral("ep_in"))), 0x81);
-    m_timeoutMs = config.value(QStringLiteral("timeout_ms"), defaults.value(QStringLiteral("timeout_ms"))).toInt();
+    m_timeoutMs = std::max(1, config.value(QStringLiteral("timeout_ms"), defaults.value(QStringLiteral("timeout_ms"))).toInt());
     m_interfaceNumber = config.value(QStringLiteral("interface"), defaults.value(QStringLiteral("interface"))).toInt();
 
     if (vid <= 0 || pid <= 0) {
@@ -182,6 +184,7 @@ void UsbRawLinuxPlugin::readLoop()
 {
 #if defined(Q_OS_LINUX) && defined(MCD_HAVE_LIBUSB)
     QByteArray buffer(4096, '\0');
+    const int readTimeoutMs = std::min(m_timeoutMs, 100);
     while (m_running) {
         int transferred = 0;
         int rc = LIBUSB_ERROR_NO_DEVICE;
@@ -196,15 +199,15 @@ void UsbRawLinuxPlugin::readLoop()
                 reinterpret_cast<unsigned char*>(buffer.data()),
                 buffer.size(),
                 &transferred,
-                m_timeoutMs);
+                readTimeoutMs);
         }
 
-        if (rc == LIBUSB_SUCCESS && transferred > 0) {
+        // libusb may report a timeout after transferring part of the requested data.
+        if (transferred > 0) {
             emit dataReceived(buffer.left(transferred));
-            continue;
         }
 
-        if (rc == LIBUSB_ERROR_TIMEOUT) {
+        if (rc == LIBUSB_SUCCESS || rc == LIBUSB_ERROR_TIMEOUT) {
             continue;
         }
 
