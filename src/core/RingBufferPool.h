@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sdk/DataFrame.h"
+
 #include <QHash>
 #include <QList>
 #include <QReadWriteLock>
@@ -27,16 +29,16 @@ class RingBufferPool {
 public:
     explicit RingBufferPool(int defaultCapacity = 20'000);
 
-    void push(quint16 channelIdx, TimedSample sample);
-    QVector<TimedSample> replay(quint16 channelIdx, qint64 from_us) const;
-    qint64 newestTimestamp(quint16 channelIdx) const;
-    QList<quint16> activeChannels() const;
+    void push(ChannelId channelIdx, TimedSample sample);
+    QVector<TimedSample> replay(ChannelId channelIdx, qint64 from_us) const;
+    qint64 newestTimestamp(ChannelId channelIdx) const;
+    QList<ChannelId> activeChannels() const;
     bool saveToFile(const QString& path, QString* errorMessage = nullptr) const;
     bool loadFromFile(const QString& path, QString* errorMessage = nullptr);
     void clear();
 
 private:
     int m_defaultCapacity;
-    QHash<quint16, RingBuffer> m_buffers;
+    QHash<ChannelId, RingBuffer> m_buffers;
     mutable QReadWriteLock m_lock;
 };
