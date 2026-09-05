@@ -13,8 +13,10 @@ enum class FrameDirection {
     Transmit
 };
 
+using ChannelId = quint64;
+
 struct ChannelSample {
-    quint16 index = 0;
+    ChannelId index = 0;
     double value = std::numeric_limits<double>::quiet_NaN();
     QString name;
     QString unit;

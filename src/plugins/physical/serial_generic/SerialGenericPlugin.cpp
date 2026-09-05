@@ -1,151 +1,91 @@
 #include "SerialGenericPlugin.h"
-
 #include <QSerialPortInfo>
-
-SerialGenericPlugin::SerialGenericPlugin(QObject* parent)
-    : IPhysicalPlugin(parent)
+#include <QSignalBlocker>
+#include <QStringList>
+SerialGenericPlugin::SerialGenericPlugin(QObject* parent) : IPhysicalPlugin(parent)
 {
+    m_port.setReadBufferSize(64 * 1024);
     connect(&m_port, &QSerialPort::readyRead, this, [this]() {
-        const QByteArray data = m_port.readAll();
-        if (!data.isEmpty()) {
-            emit dataReceived(data);
-        }
+        const auto bytes = m_port.readAll();
+        if (!bytes.isEmpty()) emit dataReceived(bytes);
     });
     connect(&m_port, &QSerialPort::errorOccurred, this, [this](QSerialPort::SerialPortError error) {
-        if (error != QSerialPort::NoError) {
-            emit errorOccurred(m_port.errorString());
+        if (error == QSerialPort::NoError) return;
+        emit errorOccurred(m_port.errorString());
+        if (error == QSerialPort::ResourceError || error == QSerialPort::DeviceNotFoundError
+            || error == QSerialPort::PermissionError || error == QSerialPort::ReadError || error == QSerialPort::WriteError) {
+            const quint64 generation = m_generation;
+            QMetaObject::invokeMethod(this, [this, generation]() { if (generation == m_generation) close(); }, Qt::QueuedConnection);
         }
     });
 }
-
-SerialGenericPlugin::~SerialGenericPlugin()
-{
-    close();
-}
-
+SerialGenericPlugin::~SerialGenericPlugin() { close(); }
 bool SerialGenericPlugin::open(const QVariantMap& config)
 {
     close();
-
-    const QVariantMap defaults = defaultConfig();
-    const QString portName = config.value(QStringLiteral("port"), defaults.value(QStringLiteral("port"))).toString();
-    if (portName.isEmpty()) {
-        emit errorOccurred(tr("Serial port is empty"));
-        return false;
+    const auto defaults = defaultConfig();
+    const auto value = [&](const QString& key) { return config.value(key, defaults.value(key)); };
+    const auto port = value("port").toString().trimmed();
+    bool baudOk = false, dataOk = false, stopOk = false;
+    const int baud = value("baud").toInt(&baudOk);
+    const int bits = value("data_bits").toInt(&dataOk);
+    const int stopBits = value("stop_bits").toInt(&stopOk);
+    const auto parity = value("parity").toString().trimmed().toLower();
+    const auto flow = value("flow_control").toString().trimmed().toLower();
+    if (port.isEmpty() || !baudOk || baud <= 0 || !dataOk || bits < 5 || bits > 8
+        || !stopOk || (stopBits != 1 && stopBits != 2)
+        || !QStringList{"none", "even", "odd", "mark", "space"}.contains(parity)
+        || !QStringList{"none", "hardware", "software"}.contains(flow)) {
+        emit errorOccurred(tr("Invalid serial configuration")); emit statusChanged(false); return false;
     }
-
-    m_port.setPortName(portName);
-    m_port.setBaudRate(config.value(QStringLiteral("baud"), defaults.value(QStringLiteral("baud"))).toInt());
-    m_port.setDataBits(parseDataBits(config.value(QStringLiteral("data_bits"), 8).toInt()));
-    m_port.setStopBits(parseStopBits(config.value(QStringLiteral("stop_bits"), 1).toInt()));
-    m_port.setParity(parseParity(config.value(QStringLiteral("parity"), QStringLiteral("none")).toString()));
-    m_port.setFlowControl(parseFlowControl(config.value(QStringLiteral("flow_control"), QStringLiteral("none")).toString()));
-
-    if (!m_port.open(QIODevice::ReadWrite)) {
-        emit errorOccurred(m_port.errorString());
-        emit statusChanged(false);
-        return false;
+    m_port.setPortName(port);
+    if (!m_port.setBaudRate(baud) || !m_port.setDataBits(parseDataBits(bits))
+        || !m_port.setStopBits(parseStopBits(stopBits)) || !m_port.setParity(parseParity(parity))
+        || !m_port.setFlowControl(parseFlowControl(flow)) || !m_port.open(QIODevice::ReadWrite)) {
+        emit errorOccurred(m_port.errorString()); emit statusChanged(false); return false;
     }
-
     emit statusChanged(true);
     return true;
 }
-
 void SerialGenericPlugin::close()
 {
+    ++m_generation;
     if (m_port.isOpen()) {
+        const QSignalBlocker blocker(&m_port);
         m_port.close();
         emit statusChanged(false);
     }
 }
-
-bool SerialGenericPlugin::isOpen() const
+bool SerialGenericPlugin::isOpen() const { return m_port.isOpen(); }
+qint64 SerialGenericPlugin::write(const QByteArray& bytes)
 {
-    return m_port.isOpen();
-}
-
-qint64 SerialGenericPlugin::write(const QByteArray& data)
-{
-    if (!m_port.isOpen()) {
-        emit errorOccurred(tr("Serial port is not open"));
-        return -1;
+    if (!isOpen()) return -1;
+    if (bytes.size() > 64 * 1024 || m_port.bytesToWrite() + bytes.size() > 1024 * 1024) {
+        emit errorOccurred(tr("Serial TX queue full or command exceeds 64 KiB")); return -1;
     }
-    return m_port.write(data);
+    return m_port.write(bytes);
 }
-
-QString SerialGenericPlugin::name() const
-{
-    return QStringLiteral("Serial (Generic)");
-}
-
-QString SerialGenericPlugin::version() const
-{
-    return QStringLiteral("1.0.0");
-}
-
+QString SerialGenericPlugin::name() const { return QStringLiteral("Serial (Generic)"); }
+QString SerialGenericPlugin::version() const { return QStringLiteral("2.0.0"); }
 QVariantMap SerialGenericPlugin::defaultConfig() const
 {
-    QString defaultPort;
-    const QList<QSerialPortInfo> ports = QSerialPortInfo::availablePorts();
-    if (!ports.isEmpty()) {
-        defaultPort = ports.first().portName();
-    }
-
-    return {
-        {QStringLiteral("port"), defaultPort},
-        {QStringLiteral("baud"), 115200},
-        {QStringLiteral("data_bits"), 8},
-        {QStringLiteral("stop_bits"), 1},
-        {QStringLiteral("parity"), QStringLiteral("none")},
-        {QStringLiteral("flow_control"), QStringLiteral("none")}
-    };
+    const auto ports = QSerialPortInfo::availablePorts();
+    const QString port = ports.isEmpty() ? QString{} : ports.first().portName();
+    return {{"port", port}, {"baud", 115200}, {"data_bits", 8}, {"stop_bits", 1}, {"parity", "none"}, {"flow_control", "none"}};
 }
-
 QSerialPort::Parity SerialGenericPlugin::parseParity(const QString& value) const
 {
-    const QString v = value.toLower();
-    if (v == QStringLiteral("even")) {
-        return QSerialPort::EvenParity;
-    }
-    if (v == QStringLiteral("odd")) {
-        return QSerialPort::OddParity;
-    }
-    if (v == QStringLiteral("mark")) {
-        return QSerialPort::MarkParity;
-    }
-    if (v == QStringLiteral("space")) {
-        return QSerialPort::SpaceParity;
-    }
+    if (value == "even") return QSerialPort::EvenParity;
+    if (value == "odd") return QSerialPort::OddParity;
+    if (value == "mark") return QSerialPort::MarkParity;
+    if (value == "space") return QSerialPort::SpaceParity;
     return QSerialPort::NoParity;
 }
-
-QSerialPort::StopBits SerialGenericPlugin::parseStopBits(int value) const
-{
-    return value == 2 ? QSerialPort::TwoStop : QSerialPort::OneStop;
-}
-
-QSerialPort::DataBits SerialGenericPlugin::parseDataBits(int value) const
-{
-    switch (value) {
-    case 5:
-        return QSerialPort::Data5;
-    case 6:
-        return QSerialPort::Data6;
-    case 7:
-        return QSerialPort::Data7;
-    default:
-        return QSerialPort::Data8;
-    }
-}
-
+QSerialPort::StopBits SerialGenericPlugin::parseStopBits(int value) const { return value == 2 ? QSerialPort::TwoStop : QSerialPort::OneStop; }
+QSerialPort::DataBits SerialGenericPlugin::parseDataBits(int value) const { return static_cast<QSerialPort::DataBits>(value); }
 QSerialPort::FlowControl SerialGenericPlugin::parseFlowControl(const QString& value) const
 {
-    const QString v = value.toLower();
-    if (v == QStringLiteral("hardware")) {
-        return QSerialPort::HardwareControl;
-    }
-    if (v == QStringLiteral("software")) {
-        return QSerialPort::SoftwareControl;
-    }
+    if (value == "hardware") return QSerialPort::HardwareControl;
+    if (value == "software") return QSerialPort::SoftwareControl;
     return QSerialPort::NoFlowControl;
 }

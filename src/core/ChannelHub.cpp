@@ -1,60 +1,38 @@
 #include "core/ChannelHub.h"
-
+#include <QPointer>
+#include <QVector>
 #include <utility>
-
-ChannelHub::ChannelHub(QObject* parent)
-    : QObject(parent)
+ChannelHub::ChannelHub(QObject* parent) : QObject(parent) {}
+void ChannelHub::subscribe(IVisualPlugin* plugin, const QList<ChannelId>& channels)
 {
-}
-
-void ChannelHub::subscribe(IVisualPlugin* plugin, const QList<quint16>& channels)
-{
-    if (!plugin) {
-        return;
-    }
-
+    if (!plugin) return;
     unsubscribe(plugin);
-    if (channels.isEmpty()) {
-        m_wildcardSubscribers.insert(plugin);
-        return;
-    }
-
-    for (quint16 channel : channels) {
-        m_subscriptions[channel].insert(plugin);
-    }
+    m_destroyConnections.insert(plugin, connect(plugin, &QObject::destroyed, this, [this, plugin]() { unsubscribe(plugin); }));
+    if (channels.isEmpty()) m_wildcardSubscribers.insert(plugin);
+    else for (ChannelId channel : channels) m_subscriptions[channel].insert(plugin);
 }
-
 void ChannelHub::unsubscribe(IVisualPlugin* plugin)
 {
-    if (!plugin) {
-        return;
-    }
-
+    if (!plugin) return;
+    QObject::disconnect(m_destroyConnections.take(plugin));
     m_wildcardSubscribers.remove(plugin);
     for (auto it = m_subscriptions.begin(); it != m_subscriptions.end();) {
         it->remove(plugin);
-        if (it->isEmpty()) {
-            it = m_subscriptions.erase(it);
-        } else {
-            ++it;
-        }
+        if (it->isEmpty()) it = m_subscriptions.erase(it);
+        else ++it;
     }
 }
-
 void ChannelHub::dispatch(const DataFrame& frame)
 {
     QSet<IVisualPlugin*> targets = m_wildcardSubscribers;
-
-    for (const ChannelSample& sample : frame.channels) {
+    for (const auto& sample : frame.channels) {
         const auto it = m_subscriptions.constFind(sample.index);
-        if (it != m_subscriptions.constEnd()) {
-            targets.unite(*it);
-        }
+        if (it != m_subscriptions.constEnd()) targets.unite(*it);
     }
-
-    for (IVisualPlugin* plugin : std::as_const(targets)) {
-        if (plugin) {
-            plugin->onChannelData(frame);
-        }
+    QVector<QPointer<IVisualPlugin>> guarded;
+    guarded.reserve(targets.size());
+    for (auto* plugin : std::as_const(targets)) guarded.push_back(plugin);
+    for (const auto& plugin : std::as_const(guarded)) {
+        if (plugin && m_destroyConnections.contains(plugin.data())) plugin->onChannelData(frame);
     }
 }

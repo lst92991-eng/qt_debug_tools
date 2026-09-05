@@ -1,31 +1,25 @@
 #pragma once
-
 #include "sdk/IControlPlugin.h"
-
 #include <QLineEdit>
 #include <QListWidget>
 #include <QSpinBox>
 #include <QStringList>
 #include <QTimer>
 #include <QToolButton>
-
 class RawControlPlugin : public IControlPlugin {
     Q_OBJECT
     Q_PLUGIN_METADATA(IID IControlPlugin_iid FILE "raw_control.json")
     Q_INTERFACES(IControlPlugin)
-
 public:
     explicit RawControlPlugin(QWidget* parent = nullptr);
-
     QString name() const override;
     bool eventFilter(QObject* watched, QEvent* event) override;
-
+    void stop() override {
+        m_periodicTimer.stop();
+        if (m_periodicButton) m_periodicButton->setChecked(false);
+    }
 private:
-    struct Preset {
-        QString name;
-        QString hex;
-    };
-
+    struct Preset { QString name; QString hex; };
     void buildUi();
     void validateInput();
     void sendCurrent(bool periodic = false);
@@ -40,7 +34,6 @@ private:
     void addPreset();
     void removeSelectedPreset();
     void sendPreset(QListWidgetItem* item);
-
     QLineEdit* m_input = nullptr;
     QToolButton* m_sendButton = nullptr;
     QToolButton* m_periodicButton = nullptr;
