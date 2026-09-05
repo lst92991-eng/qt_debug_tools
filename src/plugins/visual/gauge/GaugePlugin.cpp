@@ -112,7 +112,7 @@ void GaugePlugin::rebuildSelector()
     for (ChannelId channel : channels) {
         m_selector->addItem(
             m_labels.value(channel, QStringLiteral("CH%1").arg(channel)),
-            QVariant::fromValue<quint32>(channel));
+            QVariant::fromValue<qulonglong>(channel));
     }
     const int idx = m_selector->findData(current);
     if (idx >= 0) {
@@ -122,5 +122,5 @@ void GaugePlugin::rebuildSelector()
 
 ChannelId GaugePlugin::selectedChannel() const
 {
-    return m_selector->currentData().toUInt();
+    return m_selector->currentData().toULongLong();
 }
