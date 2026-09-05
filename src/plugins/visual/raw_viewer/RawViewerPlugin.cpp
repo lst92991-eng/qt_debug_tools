@@ -66,15 +66,15 @@ void RawViewerPlugin::onChannelData(const DataFrame& frame)
     entry.direction = frame.direction;
     entry.payload = frame.rawPayload;
 
-    if (m_pauseButton->isChecked()) {
-        appendEntry(entry);
-        return;
-    }
-
+    // Always queue first. While paused, do not mutate m_entries because displayed
+    // line indexes refer to that container. The bounded queue is flushed on resume.
     m_pending.push_back(entry);
+    if (m_pending.size() > m_maxEntries) {
+        m_pending.remove(0, m_pending.size() - m_maxEntries);
+    }
 }
 
-QList<quint16> RawViewerPlugin::subscribedChannels()
+QList<ChannelId> RawViewerPlugin::subscribedChannels()
 {
     return {};
 }
