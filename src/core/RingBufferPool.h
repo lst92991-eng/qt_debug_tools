@@ -14,7 +14,7 @@ struct TimedSample {
 struct RingBuffer {
     QVector<TimedSample> data;
     int head = 0;
-    int capacity = 1'000'000;
+    int capacity = 20'000;
     qint64 oldest_ts = 0;
     int sampleCount = 0;
 
@@ -25,7 +25,7 @@ struct RingBuffer {
 
 class RingBufferPool {
 public:
-    explicit RingBufferPool(int defaultCapacity = 1'000'000);
+    explicit RingBufferPool(int defaultCapacity = 20'000);
 
     void push(quint16 channelIdx, TimedSample sample);
     QVector<TimedSample> replay(quint16 channelIdx, qint64 from_us) const;
