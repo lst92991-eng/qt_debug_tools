@@ -4,6 +4,7 @@
 #include "sdk/IVisualPlugin.h"
 
 #include <QHash>
+#include <QMetaObject>
 #include <QObject>
 #include <QSet>
 
@@ -19,4 +20,5 @@ public:
 private:
     QHash<quint16, QSet<IVisualPlugin*>> m_subscriptions;
     QSet<IVisualPlugin*> m_wildcardSubscribers;
+    QHash<IVisualPlugin*, QMetaObject::Connection> m_destroyConnections;
 };
