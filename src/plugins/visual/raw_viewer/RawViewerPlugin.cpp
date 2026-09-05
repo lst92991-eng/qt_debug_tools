@@ -1,345 +1,247 @@
 #include "RawViewerPlugin.h"
-
+#include <QAbstractListModel>
+#include <QApplication>
+#include <QClipboard>
+#include <QColor>
 #include <QDateTime>
+#include <QFileDialog>
 #include <QFontDatabase>
 #include <QHBoxLayout>
-#include <QLabel>
+#include <QItemSelectionModel>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QRegularExpression>
-#include <QScrollBar>
+#include <QSaveFile>
+#include <QShortcut>
+#include <QSortFilterProxyModel>
 #include <QSplitter>
-#include <QStringList>
-#include <QSyntaxHighlighter>
-#include <QTextCharFormat>
-#include <QTextCursor>
-#include <QTextDocument>
 #include <QVBoxLayout>
-
 #include <algorithm>
 #include <utility>
-
-class DirectionHighlighter : public QSyntaxHighlighter {
+namespace {
+constexpr int MaxEntries = 50000;
+constexpr qsizetype MaxBytes = 8 * 1024 * 1024;
+}
+// Row removal and selection remapping are owned by Qt, not a parallel line-index array.
+class RawPacketModel : public QAbstractListModel {
 public:
-    explicit DirectionHighlighter(QTextDocument* parent)
-        : QSyntaxHighlighter(parent)
-    {
-        m_rx.setForeground(QColor(45, 102, 214));
-        m_rx.setFontWeight(QFont::Bold);
-        m_tx.setForeground(QColor(24, 145, 77));
-        m_tx.setFontWeight(QFont::Bold);
+    explicit RawPacketModel(QObject* parent) : QAbstractListModel(parent) {}
+    int rowCount(const QModelIndex& parent = QModelIndex()) const override { return parent.isValid() ? 0 : int(entries.size()); }
+    QVariant data(const QModelIndex& index, int role) const override {
+        if (!index.isValid() || index.row() < 0 || index.row() >= rowCount()) return {};
+        const auto& entry = entries[size_t(index.row())];
+        if (role == Qt::DisplayRole) return entry.line;
+        if (role == Qt::UserRole) return entry.payload;
+        if (role == Qt::ForegroundRole) return entry.direction == FrameDirection::Transmit ? QColor(24,145,77) : QColor(45,102,214);
+        return {};
     }
-
-protected:
-    void highlightBlock(const QString& text) override
-    {
-        const int rxPos = text.indexOf(QStringLiteral(" RX "));
-        if (rxPos >= 0) {
-            setFormat(rxPos + 1, 2, m_rx);
-        }
-        const int txPos = text.indexOf(QStringLiteral(" TX "));
-        if (txPos >= 0) {
-            setFormat(txPos + 1, 2, m_tx);
+    void append(std::deque<RawPacketEntry>& pending) {
+        if (pending.empty()) return;
+        const int oldCount = rowCount();
+        beginInsertRows({}, oldCount, oldCount + int(pending.size()) - 1);
+        for (auto& entry : pending) { bytes += entry.payload.size(); entries.push_back(std::move(entry)); }
+        pending.clear();
+        endInsertRows();
+        qsizetype retained = bytes;
+        size_t count = 0;
+        while (count < entries.size() && (entries.size() - count > MaxEntries || retained > MaxBytes)) retained -= entries[count++].payload.size();
+        if (count) {
+            beginRemoveRows({}, 0, int(count) - 1);
+            for (size_t i = 0; i < count; ++i) entries.pop_front();
+            bytes = retained;
+            evicted += count;
+            endRemoveRows();
         }
     }
-
-private:
-    QTextCharFormat m_rx;
-    QTextCharFormat m_tx;
+    void clear() { beginResetModel(); entries.clear(); bytes = 0; evicted = 0; endResetModel(); }
+    std::deque<RawPacketEntry> entries;
+    qsizetype bytes = 0;
+    quint64 evicted = 0;
 };
-
-RawViewerPlugin::RawViewerPlugin(QWidget* parent)
-    : IVisualPlugin(parent)
+class RawPacketFilter : public QSortFilterProxyModel {
+public:
+    explicit RawPacketFilter(QObject* parent) : QSortFilterProxyModel(parent) {}
+    void setNeedle(const QByteArray& needle) { m_needle = needle; invalidateFilter(); }
+protected:
+    bool filterAcceptsRow(int row, const QModelIndex& parent) const override {
+        return m_needle.isEmpty() || sourceModel()->index(row, 0, parent).data(Qt::UserRole).toByteArray().contains(m_needle);
+    }
+private:
+    QByteArray m_needle;
+};
+RawViewerPlugin::RawViewerPlugin(QWidget* parent) : IVisualPlugin(parent)
 {
     buildUi();
     connect(&m_flushTimer, &QTimer::timeout, this, &RawViewerPlugin::flushPending);
     m_flushTimer.start(16);
 }
-
 void RawViewerPlugin::onChannelData(const DataFrame& frame)
 {
-    if (frame.rawPayload.isEmpty()) {
-        return;
-    }
-
-    PacketEntry entry;
+    if (frame.rawPayload.isEmpty()) return;
+    if (frame.rawPayload.size() > MaxBytes) { ++m_dropped; return; }
+    RawPacketEntry entry;
     entry.timestamp_us = frame.timestamp_us;
     entry.direction = frame.direction;
     entry.payload = frame.rawPayload;
-
-    // Always queue first. While paused, do not mutate m_entries because displayed
-    // line indexes refer to that container. The bounded queue is flushed on resume.
-    m_pending.push_back(entry);
-    if (m_pending.size() > m_maxEntries) {
-        m_pending.remove(0, m_pending.size() - m_maxEntries);
+    entry.attributes = frame.attributes;
+    entry.line = formatLine(entry);
+    m_pendingBytes += entry.payload.size();
+    m_pending.push_back(std::move(entry));
+    while (m_pending.size() > MaxEntries || m_pendingBytes > MaxBytes) {
+        m_pendingBytes -= m_pending.front().payload.size();
+        m_pending.pop_front();
+        ++m_dropped;
     }
 }
-
-QList<ChannelId> RawViewerPlugin::subscribedChannels()
+QList<ChannelId> RawViewerPlugin::subscribedChannels() { return {}; }
+qint64 RawViewerPlugin::historyFrom() { return 0; }
+QString RawViewerPlugin::name() const { return QStringLiteral("Raw Viewer"); }
+void RawViewerPlugin::clearHistory()
 {
-    return {};
+    m_pending.clear(); m_pendingBytes = 0; m_dropped = 0;
+    m_model->clear(); m_detail->clear(); updateStatistics();
 }
-
-qint64 RawViewerPlugin::historyFrom()
-{
-    return 0;
-}
-
-QString RawViewerPlugin::name() const
-{
-    return QStringLiteral("Raw Viewer");
-}
-
 void RawViewerPlugin::buildUi()
 {
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(8, 8, 8, 8);
-    root->setSpacing(6);
-
-    auto* toolbar = new QHBoxLayout;
-    toolbar->setSpacing(6);
-
+    auto* bar = new QHBoxLayout;
     m_autoScroll = new QCheckBox(tr("AutoScroll"), this);
     m_autoScroll->setChecked(true);
-
     m_pauseButton = new QToolButton(this);
+    m_pauseButton->setObjectName("pausePackets");
     m_pauseButton->setText(tr("Pause"));
     m_pauseButton->setCheckable(true);
-
-    auto* clearButton = new QPushButton(tr("Clear"), this);
+    auto* clear = new QPushButton(tr("Clear"), this);
+    auto* save = new QPushButton(tr("Export Raw Log"), this);
     m_filter = new QLineEdit(this);
+    m_filter->setObjectName("packetFilter");
     m_filter->setPlaceholderText(tr("Filter hex pattern"));
-
-    toolbar->addWidget(m_autoScroll);
-    toolbar->addWidget(m_pauseButton);
-    toolbar->addWidget(clearButton);
-    toolbar->addWidget(new QLabel(tr("Filter:"), this));
-    toolbar->addWidget(m_filter, 1);
-    root->addLayout(toolbar);
-
+    bar->addWidget(m_autoScroll); bar->addWidget(m_pauseButton); bar->addWidget(clear); bar->addWidget(save); bar->addWidget(m_filter, 1);
+    root->addLayout(bar);
     auto* splitter = new QSplitter(Qt::Vertical, this);
-    m_log = new QPlainTextEdit(splitter);
-    m_log->setReadOnly(true);
-    m_log->setLineWrapMode(QPlainTextEdit::NoWrap);
-    m_log->document()->setMaximumBlockCount(m_maxEntries);
+    m_log = new QListView(splitter);
+    m_log->setObjectName("packetList");
     m_log->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    new DirectionHighlighter(m_log->document());
-
+    m_log->setUniformItemSizes(true);
+    m_log->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_log->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_model = new RawPacketModel(this);
+    m_proxy = new RawPacketFilter(this);
+    m_proxy->setSourceModel(m_model);
+    m_log->setModel(m_proxy);
     m_detail = new QPlainTextEdit(splitter);
+    m_detail->setObjectName("packetDetails");
     m_detail->setReadOnly(true);
     m_detail->setLineWrapMode(QPlainTextEdit::NoWrap);
-    m_detail->setMaximumHeight(160);
     m_detail->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-
-    splitter->addWidget(m_log);
-    splitter->addWidget(m_detail);
-    splitter->setStretchFactor(0, 4);
-    splitter->setStretchFactor(1, 1);
+    m_detail->setMaximumHeight(160);
+    splitter->addWidget(m_log); splitter->addWidget(m_detail);
+    splitter->setStretchFactor(0, 4); splitter->setStretchFactor(1, 1);
     root->addWidget(splitter, 1);
-
-    connect(clearButton, &QPushButton::clicked, this, [this]() {
-        m_entries.clear();
-        m_pending.clear();
-        m_displayedEntryIndexes.clear();
-        m_log->clear();
-        m_detail->clear();
+    m_statistics = new QLabel(this);
+    root->addWidget(m_statistics);
+    connect(clear, &QPushButton::clicked, this, &RawViewerPlugin::clearHistory);
+    connect(save, &QPushButton::clicked, this, &RawViewerPlugin::exportLog);
+    connect(m_filter, &QLineEdit::textChanged, this, &RawViewerPlugin::updateFilter);
+    connect(m_log->selectionModel(), &QItemSelectionModel::currentChanged, this, [this]() { updateDetailPane(); });
+    auto* copy = new QShortcut(QKeySequence::Copy, m_log);
+    connect(copy, &QShortcut::activated, this, [this]() {
+        auto selected = m_log->selectionModel()->selectedRows();
+        std::sort(selected.begin(), selected.end(), [](const auto& a, const auto& b) { return a.row() < b.row(); });
+        QStringList lines;
+        for (const auto& index : selected) lines.append(index.data().toString());
+        QApplication::clipboard()->setText(lines.join('\n'));
     });
-    connect(m_filter, &QLineEdit::textChanged, this, &RawViewerPlugin::rebuildVisibleLog);
-    connect(m_log, &QPlainTextEdit::cursorPositionChanged, this, &RawViewerPlugin::updateDetailPane);
 }
-
-void RawViewerPlugin::appendEntry(const PacketEntry& entry)
-{
-    m_entries.push_back(entry);
-    if (m_entries.size() > m_maxEntries) {
-        const int removeCount = m_entries.size() - m_maxEntries;
-        m_entries.remove(0, removeCount);
-        for (int& index : m_displayedEntryIndexes) {
-            index -= removeCount;
-        }
-        while (!m_displayedEntryIndexes.isEmpty() && m_displayedEntryIndexes.first() < 0) {
-            m_displayedEntryIndexes.removeFirst();
-        }
-    }
-}
-
 void RawViewerPlugin::flushPending()
 {
-    if (m_pending.isEmpty() || m_pauseButton->isChecked()) {
-        return;
+    if (!m_pauseButton->isChecked() && !m_pending.empty()) {
+        m_model->append(m_pending);
+        m_pendingBytes = 0;
+        if (m_autoScroll->isChecked()) m_log->scrollToBottom();
+        updateDetailPane();
     }
-
-    const bool atBottom = m_log->verticalScrollBar()->value() == m_log->verticalScrollBar()->maximum();
-    QString batch;
-    batch.reserve(m_pending.size() * 96);
-
-    for (const PacketEntry& entry : std::as_const(m_pending)) {
-        appendEntry(entry);
-        const int entryIndex = m_entries.size() - 1;
-        if (matchesFilter(entry.payload)) {
-            batch.append(formatLine(entry));
-            batch.append(QLatin1Char('\n'));
-            m_displayedEntryIndexes.push_back(entryIndex);
-        }
-    }
-    m_pending.clear();
-
-    if (batch.isEmpty()) {
-        return;
-    }
-
-    QTextCursor cursor = m_log->textCursor();
-    cursor.movePosition(QTextCursor::End);
-    m_log->setTextCursor(cursor);
-    m_log->insertPlainText(batch);
-    trimDisplayedIndexes();
-
-    if (m_autoScroll->isChecked() || atBottom) {
-        m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
-    }
+    updateStatistics();
 }
-
-void RawViewerPlugin::rebuildVisibleLog()
+void RawViewerPlugin::updateStatistics()
 {
-    m_log->clear();
-    m_detail->clear();
-    m_displayedEntryIndexes.clear();
-
-    QString batch;
-    for (int i = 0; i < m_entries.size(); ++i) {
-        const PacketEntry& entry = m_entries.at(i);
-        if (!matchesFilter(entry.payload)) {
-            continue;
-        }
-        batch.append(formatLine(entry));
-        batch.append(QLatin1Char('\n'));
-        m_displayedEntryIndexes.push_back(i);
-    }
-
-    m_log->setPlainText(batch);
-    trimDisplayedIndexes();
-    if (m_autoScroll->isChecked()) {
-        m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
-    }
+    m_statistics->setText(tr("Retained: %1 | Paused/pending: %2 | Evicted: %3 | Dropped: %4 | TX = queued, not device ACK")
+        .arg(m_model->rowCount()).arg(qulonglong(m_pending.size())).arg(m_model->evicted).arg(m_dropped));
 }
-
 void RawViewerPlugin::updateDetailPane()
 {
-    const int block = m_log->textCursor().blockNumber();
-    if (block < 0 || block >= m_displayedEntryIndexes.size()) {
-        m_detail->clear();
+    const auto index = m_log->currentIndex();
+    m_detail->setPlainText(index.isValid() ? formatHexDump(index.data(Qt::UserRole).toByteArray()) : QString{});
+}
+void RawViewerPlugin::updateFilter()
+{
+    QString text = m_filter->text();
+    text.remove(QRegularExpression(QStringLiteral("[\\s,;:_-]")));
+    static const QRegularExpression valid(QStringLiteral("^[0-9a-fA-F]*$"));
+    if (text.size() % 2 || !valid.match(text).hasMatch()) {
+        m_filter->setStyleSheet(QStringLiteral("QLineEdit { border: 1px solid red; }"));
+        m_filter->setToolTip(tr("Invalid HEX filter; previous filter remains active"));
         return;
     }
-
-    const int entryIndex = m_displayedEntryIndexes.at(block);
-    if (entryIndex < 0 || entryIndex >= m_entries.size()) {
-        m_detail->clear();
-        return;
-    }
-
-    const PacketEntry& entry = m_entries.at(entryIndex);
-    m_detail->setPlainText(formatHexDump(entry.payload));
+    m_filter->setStyleSheet({}); m_filter->setToolTip({});
+    m_proxy->setNeedle(QByteArray::fromHex(text.toLatin1()));
+    updateDetailPane();
 }
-
-bool RawViewerPlugin::matchesFilter(const QByteArray& payload) const
+QString RawViewerPlugin::formatLine(const RawPacketEntry& entry) const
 {
-    const QByteArray needle = filterBytes();
-    if (needle.isEmpty()) {
-        return true;
-    }
-    return payload.contains(needle);
+    const auto time = QDateTime::fromMSecsSinceEpoch(entry.timestamp_us / 1000).toString("HH:mm:ss.zzz")
+        + QStringLiteral("%1").arg(entry.timestamp_us % 1000, 3, 10, QLatin1Char('0'));
+    const auto direction = entry.direction == FrameDirection::Transmit ? QStringLiteral("TX") : QStringLiteral("RX");
+    return QStringLiteral("%1  %2  %3  |%4|").arg(time, direction, formatHex(entry.payload, 32).leftJustified(98, QLatin1Char(' ')), formatAscii(entry.payload, 32));
 }
-
-QString RawViewerPlugin::formatLine(const PacketEntry& entry) const
-{
-    const QString direction = entry.direction == FrameDirection::Transmit
-        ? QStringLiteral("TX")
-        : QStringLiteral("RX");
-    const QString hex = formatHex(entry.payload, 32);
-    const QString ascii = formatAscii(entry.payload, 32);
-    return QStringLiteral("%1  %2  %3  |%4|")
-        .arg(formatTimestamp(entry.timestamp_us), direction, hex.leftJustified(98, QLatin1Char(' ')), ascii);
-}
-
-QString RawViewerPlugin::formatTimestamp(qint64 timestamp_us) const
-{
-    const QDateTime dt = QDateTime::fromMSecsSinceEpoch(timestamp_us / 1000);
-    const int micros = static_cast<int>(timestamp_us % 1000);
-    return QStringLiteral("%1%2")
-        .arg(dt.toString(QStringLiteral("HH:mm:ss.zzz")))
-        .arg(micros, 3, 10, QLatin1Char('0'));
-}
-
 QString RawViewerPlugin::formatHex(const QByteArray& payload, int maxBytes) const
 {
-    const int size = static_cast<int>(payload.size());
-    const int count = maxBytes < 0 ? size : std::min(size, maxBytes);
-    QStringList parts;
-    parts.reserve(count + 1);
-    for (int i = 0; i < count; ++i) {
-        parts << QStringLiteral("%1")
-                     .arg(static_cast<unsigned char>(payload.at(i)), 2, 16, QLatin1Char('0'))
-                     .toUpper();
-    }
-    if (maxBytes >= 0 && payload.size() > maxBytes) {
-        parts << QStringLiteral("...");
-    }
-    return parts.join(QLatin1Char(' '));
+    const qsizetype count = maxBytes < 0 ? payload.size() : std::min<qsizetype>(maxBytes, payload.size());
+    QString result = QString::fromLatin1(payload.left(count).toHex(' ')).toUpper();
+    if (count < payload.size()) result += " ...";
+    return result;
 }
-
 QString RawViewerPlugin::formatAscii(const QByteArray& payload, int maxBytes) const
 {
-    const int size = static_cast<int>(payload.size());
-    const int count = maxBytes < 0 ? size : std::min(size, maxBytes);
-    QString ascii;
-    ascii.reserve(count + (payload.size() > count ? 3 : 0));
-    for (int i = 0; i < count; ++i) {
-        const unsigned char c = static_cast<unsigned char>(payload.at(i));
-        ascii.append(c >= 32 && c < 127 ? QLatin1Char(static_cast<char>(c)) : QLatin1Char('.'));
+    const qsizetype count = maxBytes < 0 ? payload.size() : std::min<qsizetype>(maxBytes, payload.size());
+    QString result;
+    for (qsizetype i = 0; i < count; ++i) {
+        const auto c = static_cast<unsigned char>(payload.at(i));
+        result.append(c >= 32 && c < 127 ? QChar(c) : QChar('.'));
     }
-    if (maxBytes >= 0 && payload.size() > maxBytes) {
-        ascii.append(QStringLiteral("..."));
-    }
-    return ascii;
+    if (count < payload.size()) result += "...";
+    return result;
 }
-
 QString RawViewerPlugin::formatHexDump(const QByteArray& payload) const
 {
-    QString dump;
-    for (int offset = 0; offset < payload.size(); offset += 16) {
-        const QByteArray row = payload.mid(offset, 16);
-        dump.append(QStringLiteral("%1  %2")
-                        .arg(offset, 8, 16, QLatin1Char('0')).toUpper()
-                        .arg(formatHex(row, -1).leftJustified(47, QLatin1Char(' '))));
-        dump.append(QStringLiteral("  |%1|\n").arg(formatAscii(row, -1)));
+    QString result;
+    for (qsizetype offset = 0; offset < payload.size(); offset += 16) {
+        const auto bytes = payload.mid(offset, 16);
+        result += QStringLiteral("%1  %2  |%3|\n").arg(qulonglong(offset), 8, 16, QLatin1Char('0')).toUpper()
+            .arg(formatHex(bytes).leftJustified(47, QLatin1Char(' ')), formatAscii(bytes));
     }
-    return dump;
+    return result;
 }
-
-QByteArray RawViewerPlugin::filterBytes() const
+void RawViewerPlugin::exportLog()
 {
-    QString compact = m_filter->text();
-    compact.remove(QRegularExpression(QStringLiteral("[\\s,;:_-]")));
-    if (compact.isEmpty() || compact.size() % 2 != 0) {
-        return {};
-    }
-
-    QByteArray bytes;
-    bytes.reserve(compact.size() / 2);
-    for (int i = 0; i < compact.size(); i += 2) {
-        bool ok = false;
-        const int value = compact.mid(i, 2).toInt(&ok, 16);
-        if (!ok) {
-            return {};
-        }
-        bytes.append(static_cast<char>(value));
-    }
-    return bytes;
-}
-
-void RawViewerPlugin::trimDisplayedIndexes()
-{
-    const int blockCount = m_log->document()->blockCount();
-    while (m_displayedEntryIndexes.size() > blockCount) {
-        m_displayedEntryIndexes.removeFirst();
-    }
+    const auto path = QFileDialog::getSaveFileName(this, tr("Export Retained Raw Log"), "raw_log.jsonl", tr("Raw packet log (*.jsonl)"));
+    if (path.isEmpty()) return;
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) { QMessageBox::warning(this, tr("Export failed"), file.errorString()); return; }
+    const auto write = [&file](const RawPacketEntry& entry) {
+        auto attributes = entry.attributes;
+        if (attributes.contains("payload")) attributes.insert("payload", QString::fromLatin1(attributes.value("payload").toByteArray().toHex()));
+        if (attributes.contains("bytes")) attributes.insert("bytes", QString::fromLatin1(attributes.value("bytes").toByteArray().toHex()));
+        QJsonObject row{{"timestamp_us", QString::number(entry.timestamp_us)},
+            {"direction", entry.direction == FrameDirection::Transmit ? "TX" : "RX"},
+            {"raw_hex", QString::fromLatin1(entry.payload.toHex())}, {"attributes", QJsonObject::fromVariantMap(attributes)}};
+        const auto bytes = QJsonDocument(row).toJson(QJsonDocument::Compact) + '\n';
+        return file.write(bytes) == bytes.size();
+    };
+    bool ok = true;
+    for (const auto& entry : m_model->entries) { if (!write(entry)) { ok = false; break; } }
+    if (ok) for (const auto& entry : m_pending) { if (!write(entry)) { ok = false; break; } }
+    if (!ok || !file.commit()) QMessageBox::warning(this, tr("Export failed"), file.errorString());
 }
