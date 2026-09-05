@@ -125,7 +125,7 @@ bool RingBufferPool::saveToFile(const QString& path, QString* errorMessage) cons
     for (ChannelId channel : channels) {
         const RingBuffer& buffer = m_buffers.value(channel);
         const QVector<TimedSample> samples = buffer.range(0, 0);
-        out << static_cast<quint32>(channel)
+        out << static_cast<quint64>(channel)
             << static_cast<quint32>(buffer.capacity)
             << static_cast<quint32>(samples.size());
         for (const TimedSample& sample : samples) {
@@ -175,7 +175,7 @@ bool RingBufferPool::loadFromFile(const QString& path, QString* errorMessage)
             in >> legacyChannel;
             channel = legacyChannel;
         } else {
-            quint32 persistedChannel = 0;
+            quint64 persistedChannel = 0;
             in >> persistedChannel;
             channel = persistedChannel;
         }
