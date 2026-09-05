@@ -13,7 +13,7 @@ enum class FrameDirection {
     Transmit
 };
 
-using ChannelId = quint32;
+using ChannelId = quint64;
 
 struct ChannelSample {
     ChannelId index = 0;
