@@ -12,6 +12,7 @@ public:
 
     void feedBytes(const QByteArray& raw) override;
     QByteArray encodeCommand(const QVariantMap& command) override;
+    void reset() override;
     QString name() const override;
     QString version() const override;
 
