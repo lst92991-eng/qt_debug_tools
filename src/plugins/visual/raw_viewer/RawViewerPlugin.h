@@ -18,7 +18,7 @@ public:
     explicit RawViewerPlugin(QWidget* parent = nullptr);
 
     void onChannelData(const DataFrame& frame) override;
-    QList<quint16> subscribedChannels() override;
+    QList<ChannelId> subscribedChannels() override;
     qint64 historyFrom() override;
     QString name() const override;
 
