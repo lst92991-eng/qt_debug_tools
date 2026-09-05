@@ -4,7 +4,14 @@
 #include <limits>
 DebugCore* DebugCore::instance() { static DebugCore core; return &core; }
 DebugCore::DebugCore(QObject* parent) : QObject(parent), m_pluginMgr(this), m_channelHub(this) {}
-DebugCore::~DebugCore() { invalidateDataPath(); m_pluginMgr.clear(); }
+DebugCore::~DebugCore()
+{
+    invalidateDataPath();
+    m_pluginMgr.clear();
+    // PluginManager's member destructor also calls clear(). Its signals must not
+    // enter DebugCore after the connection members and ChannelHub are destroyed.
+    QObject::disconnect(&m_pluginMgr, nullptr, this, nullptr);
+}
 PluginManager* DebugCore::pluginManager() { return &m_pluginMgr; }
 ChannelHub* DebugCore::channelHub() { return &m_channelHub; }
 RingBufferPool* DebugCore::ringBufferPool() { return &m_ringPool; }
@@ -42,7 +49,7 @@ void DebugCore::publish(const DataFrame& frame)
     for (const auto& sample : enriched.channels) {
         if (std::isfinite(sample.value) && !m_ringPool.push(sample.index, {enriched.timestamp_us, sample.value}) && !m_historyLimitReported) {
             m_historyLimitReported = true;
-            emit errorOccurred(tr("Numeric history limit reached; some new channels are not recorded. Clear history to reset."));
+            emit errorOccurred(tr("Numeric history rejected a sample: channel limit or invalid timestamp. Clear history to reset channel allocation."));
         }
     }
     m_channelHub.dispatch(enriched);

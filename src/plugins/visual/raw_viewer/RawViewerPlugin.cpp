@@ -23,8 +23,8 @@
 namespace {
 constexpr int MaxEntries = 50000;
 constexpr qsizetype MaxBytes = 8 * 1024 * 1024;
+constexpr qsizetype MaxPreviewBytes = 4096;
 }
-// Row removal and selection remapping are owned by Qt, not a parallel line-index array.
 class RawPacketModel : public QAbstractListModel {
 public:
     explicit RawPacketModel(QObject* parent) : QAbstractListModel(parent) {}
@@ -217,11 +217,13 @@ QString RawViewerPlugin::formatAscii(const QByteArray& payload, int maxBytes) co
 QString RawViewerPlugin::formatHexDump(const QByteArray& payload) const
 {
     QString result;
-    for (qsizetype offset = 0; offset < payload.size(); offset += 16) {
-        const auto bytes = payload.mid(offset, 16);
+    const qsizetype previewSize = std::min(payload.size(), MaxPreviewBytes);
+    for (qsizetype offset = 0; offset < previewSize; offset += 16) {
+        const auto bytes = payload.mid(offset, std::min<qsizetype>(16, previewSize - offset));
         result += QStringLiteral("%1  %2  |%3|\n").arg(qulonglong(offset), 8, 16, QLatin1Char('0')).toUpper()
             .arg(formatHex(bytes).leftJustified(47, QLatin1Char(' ')), formatAscii(bytes));
     }
+    if (previewSize < payload.size()) result += tr("Preview limited to %1 of %2 bytes. Export Raw Log preserves the complete retained packet.").arg(previewSize).arg(payload.size());
     return result;
 }
 void RawViewerPlugin::exportLog()
