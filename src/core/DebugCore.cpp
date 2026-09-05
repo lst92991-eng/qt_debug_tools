@@ -130,7 +130,7 @@ QVariantMap DebugCore::channelMetadata() const
     return m_channelMetadata;
 }
 
-void DebugCore::setChannelMetadata(quint16 channel, const QString& name, const QString& unit)
+void DebugCore::setChannelMetadata(ChannelId channel, const QString& name, const QString& unit)
 {
     QVariantMap meta;
     meta.insert(QStringLiteral("name"), name);
