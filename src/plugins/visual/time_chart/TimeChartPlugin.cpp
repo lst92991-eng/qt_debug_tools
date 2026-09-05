@@ -21,32 +21,42 @@ TimeChartPlugin::TimeChartPlugin(QWidget* parent)
 
 void TimeChartPlugin::onChannelData(const DataFrame& frame)
 {
-    bool changed = false;
+    bool dataChanged = false;
+    bool selectorChanged = false;
     for (const ChannelSample& sample : frame.channels) {
         if (std::isnan(sample.value)) {
             continue;
         }
 
+        const bool isNewChannel = !m_series.contains(sample.index);
         QVector<Point>& points = m_series[sample.index];
         points.push_back({frame.timestamp_us, sample.value});
-        if (!sample.name.isEmpty()) {
-            m_labels.insert(sample.index, sample.name);
-        } else if (!m_labels.contains(sample.index)) {
-            m_labels.insert(sample.index, QStringLiteral("CH%1").arg(sample.index));
+
+        const QString label = sample.name.isEmpty()
+            ? m_labels.value(sample.index, QStringLiteral("CH%1").arg(sample.index))
+            : sample.name;
+        if (isNewChannel || m_labels.value(sample.index) != label) {
+            m_labels.insert(sample.index, label);
+            selectorChanged = true;
         }
-        changed = true;
+        dataChanged = true;
     }
 
-    if (changed) {
+    if (dataChanged) {
         trimSeries();
+    }
+
+    if (selectorChanged) {
         const QSignalBlocker blocker(m_channelSelector);
-        const QString current = m_channelSelector->currentData().toString();
+        const QVariant current = m_channelSelector->currentData();
         m_channelSelector->clear();
-        m_channelSelector->addItem(tr("All"), QString());
-        QList<quint16> channels = m_series.keys();
+        m_channelSelector->addItem(tr("All"), QVariant());
+        QList<ChannelId> channels = m_series.keys();
         std::sort(channels.begin(), channels.end());
-        for (quint16 channel : channels) {
-            m_channelSelector->addItem(m_labels.value(channel, QStringLiteral("CH%1").arg(channel)), channel);
+        for (ChannelId channel : channels) {
+            m_channelSelector->addItem(
+                m_labels.value(channel, QStringLiteral("CH%1").arg(channel)),
+                QVariant::fromValue<quint32>(channel));
         }
         const int idx = m_channelSelector->findData(current);
         if (idx >= 0) {
@@ -55,7 +65,7 @@ void TimeChartPlugin::onChannelData(const DataFrame& frame)
     }
 }
 
-QList<quint16> TimeChartPlugin::subscribedChannels()
+QList<ChannelId> TimeChartPlugin::subscribedChannels()
 {
     return {};
 }
@@ -82,7 +92,7 @@ void TimeChartPlugin::paintEvent(QPaintEvent* event)
     painter.setPen(QColor(210, 215, 222));
     painter.drawRect(plot);
 
-    const QList<quint16> channels = visibleChannels();
+    const QList<ChannelId> channels = visibleChannels();
     if (channels.isEmpty()) {
         painter.setPen(QColor(95, 99, 104));
         painter.drawText(plot, Qt::AlignCenter, tr("No numeric channel data"));
@@ -92,7 +102,7 @@ void TimeChartPlugin::paintEvent(QPaintEvent* event)
     qint64 newest = 0;
     double minValue = std::numeric_limits<double>::infinity();
     double maxValue = -std::numeric_limits<double>::infinity();
-    for (quint16 channel : channels) {
+    for (ChannelId channel : channels) {
         const QVector<Point>& points = m_series.value(channel);
         for (const Point& point : points) {
             newest = std::max(newest, point.ts);
@@ -125,7 +135,7 @@ void TimeChartPlugin::paintEvent(QPaintEvent* event)
     };
 
     int colorIndex = 0;
-    for (quint16 channel : channels) {
+    for (ChannelId channel : channels) {
         const QVector<Point>& points = m_series.value(channel);
         QPainterPath path;
         bool started = false;
@@ -164,7 +174,7 @@ void TimeChartPlugin::buildUi()
 
     auto* toolbar = new QHBoxLayout;
     m_channelSelector = new QComboBox(this);
-    m_channelSelector->addItem(tr("All"), QString());
+    m_channelSelector->addItem(tr("All"), QVariant());
     m_followLatest = new QCheckBox(tr("Follow"), this);
     m_followLatest->setChecked(true);
     toolbar->addWidget(new QLabel(tr("Channel:"), this));
@@ -187,14 +197,14 @@ void TimeChartPlugin::trimSeries()
     }
 }
 
-QList<quint16> TimeChartPlugin::visibleChannels() const
+QList<ChannelId> TimeChartPlugin::visibleChannels() const
 {
     const QVariant selected = m_channelSelector->currentData();
-    if (selected.isValid() && !selected.toString().isEmpty()) {
-        return {static_cast<quint16>(selected.toUInt())};
+    if (selected.isValid()) {
+        return {selected.toUInt()};
     }
 
-    QList<quint16> channels = m_series.keys();
+    QList<ChannelId> channels = m_series.keys();
     std::sort(channels.begin(), channels.end());
     return channels;
 }
