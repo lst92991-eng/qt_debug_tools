@@ -7,7 +7,8 @@
 
 namespace {
 constexpr quint32 kRingFileMagic = 0x4d434452;
-constexpr quint16 kRingFileVersion = 1;
+constexpr quint16 kRingFileVersion = 2;
+constexpr quint16 kOldestSupportedRingFileVersion = 1;
 constexpr quint32 kMaxPersistedChannels = 65'536;
 constexpr quint32 kMaxPersistedCapacity = 1'000'000;
 constexpr quint32 kMaxPersistedSamplesPerChannel = 1'000'000;
@@ -69,7 +70,7 @@ RingBufferPool::RingBufferPool(int defaultCapacity)
 {
 }
 
-void RingBufferPool::push(quint16 channelIdx, TimedSample sample)
+void RingBufferPool::push(ChannelId channelIdx, TimedSample sample)
 {
     QWriteLocker locker(&m_lock);
     RingBuffer& buffer = m_buffers[channelIdx];
@@ -79,7 +80,7 @@ void RingBufferPool::push(quint16 channelIdx, TimedSample sample)
     buffer.push(sample);
 }
 
-QVector<TimedSample> RingBufferPool::replay(quint16 channelIdx, qint64 from_us) const
+QVector<TimedSample> RingBufferPool::replay(ChannelId channelIdx, qint64 from_us) const
 {
     QReadLocker locker(&m_lock);
     const auto it = m_buffers.constFind(channelIdx);
@@ -89,17 +90,17 @@ QVector<TimedSample> RingBufferPool::replay(quint16 channelIdx, qint64 from_us) 
     return it->range(from_us, 0);
 }
 
-qint64 RingBufferPool::newestTimestamp(quint16 channelIdx) const
+qint64 RingBufferPool::newestTimestamp(ChannelId channelIdx) const
 {
     QReadLocker locker(&m_lock);
     const auto it = m_buffers.constFind(channelIdx);
     return it == m_buffers.constEnd() ? 0 : it->newestTimestamp();
 }
 
-QList<quint16> RingBufferPool::activeChannels() const
+QList<ChannelId> RingBufferPool::activeChannels() const
 {
     QReadLocker locker(&m_lock);
-    QList<quint16> keys = m_buffers.keys();
+    QList<ChannelId> keys = m_buffers.keys();
     std::sort(keys.begin(), keys.end());
     return keys;
 }
@@ -119,12 +120,14 @@ bool RingBufferPool::saveToFile(const QString& path, QString* errorMessage) cons
     out.setVersion(QDataStream::Qt_6_0);
     out << kRingFileMagic << kRingFileVersion << static_cast<quint32>(m_buffers.size());
 
-    QList<quint16> channels = m_buffers.keys();
+    QList<ChannelId> channels = m_buffers.keys();
     std::sort(channels.begin(), channels.end());
-    for (quint16 channel : channels) {
+    for (ChannelId channel : channels) {
         const RingBuffer& buffer = m_buffers.value(channel);
         const QVector<TimedSample> samples = buffer.range(0, 0);
-        out << channel << static_cast<quint32>(buffer.capacity) << static_cast<quint32>(samples.size());
+        out << static_cast<quint32>(channel)
+            << static_cast<quint32>(buffer.capacity)
+            << static_cast<quint32>(samples.size());
         for (const TimedSample& sample : samples) {
             out << sample.timestamp_us << sample.value;
         }
@@ -149,7 +152,9 @@ bool RingBufferPool::loadFromFile(const QString& path, QString* errorMessage)
     quint16 version = 0;
     quint32 channelCount = 0;
     in >> magic >> version >> channelCount;
-    if (magic != kRingFileMagic || version != kRingFileVersion) {
+    if (magic != kRingFileMagic
+        || version < kOldestSupportedRingFileVersion
+        || version > kRingFileVersion) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("Unsupported ring buffer file");
         }
@@ -162,12 +167,22 @@ bool RingBufferPool::loadFromFile(const QString& path, QString* errorMessage)
         return false;
     }
 
-    QHash<quint16, RingBuffer> loaded;
+    QHash<ChannelId, RingBuffer> loaded;
     for (quint32 i = 0; i < channelCount; ++i) {
-        quint16 channel = 0;
+        ChannelId channel = 0;
+        if (version == 1) {
+            quint16 legacyChannel = 0;
+            in >> legacyChannel;
+            channel = legacyChannel;
+        } else {
+            quint32 persistedChannel = 0;
+            in >> persistedChannel;
+            channel = persistedChannel;
+        }
+
         quint32 capacity = 0;
         quint32 sampleCount = 0;
-        in >> channel >> capacity >> sampleCount;
+        in >> capacity >> sampleCount;
 
         if (in.status() != QDataStream::Ok
             || capacity == 0
