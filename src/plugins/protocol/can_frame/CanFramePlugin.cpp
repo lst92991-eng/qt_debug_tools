@@ -43,6 +43,11 @@ QByteArray CanFramePlugin::encodeCommand(const QVariantMap& command)
     return frame;
 }
 
+void CanFramePlugin::reset()
+{
+    m_buffer.clear();
+}
+
 QString CanFramePlugin::name() const
 {
     return QStringLiteral("CAN Frame");
@@ -76,10 +81,17 @@ QByteArray CanFramePlugin::parseHexString(const QString& text)
 
 void CanFramePlugin::parseBuffer()
 {
-    while (m_buffer.size() >= 7) {
-        const int start = m_buffer.indexOf(QByteArray::fromHex("cafd"));
+    static const QByteArray header = QByteArray::fromHex("cafd");
+
+    while (m_buffer.size() >= 2) {
+        const int start = m_buffer.indexOf(header);
         if (start < 0) {
-            m_buffer.clear();
+            // Preserve a possible split header: ... CA | FD ...
+            if (!m_buffer.isEmpty() && static_cast<quint8>(m_buffer.back()) == 0xCA) {
+                m_buffer = QByteArray(1, static_cast<char>(0xCA));
+            } else {
+                m_buffer.clear();
+            }
             return;
         }
         if (start > 0) {
@@ -96,7 +108,8 @@ void CanFramePlugin::parseBuffer()
             | static_cast<quint8>(m_buffer.at(5));
         const int dlc = static_cast<quint8>(m_buffer.at(6));
         if (dlc > 64) {
-            m_buffer.remove(0, 2);
+            // Drop one byte, not the whole candidate header, so the next CA FD can be found.
+            m_buffer.remove(0, 1);
             continue;
         }
         if (m_buffer.size() < 7 + dlc) {
