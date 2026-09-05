@@ -115,6 +115,10 @@ bool PluginManager::activateProtocol(const QString& name)
 {
     for (IProtocolPlugin* plugin : m_protocolPlugins) {
         if (plugin->name() == name) {
+            if (m_activeProtocol && m_activeProtocol != plugin) {
+                m_activeProtocol->reset();
+            }
+            plugin->reset();
             m_activeProtocol = plugin;
             emit protocolActivated(plugin);
             return true;
@@ -132,7 +136,10 @@ void PluginManager::deactivateAll()
         m_activePhysical = nullptr;
         emit physicalDeactivated();
     }
-    m_activeProtocol = nullptr;
+    if (m_activeProtocol) {
+        m_activeProtocol->reset();
+        m_activeProtocol = nullptr;
+    }
 }
 
 IPhysicalPlugin* PluginManager::activePhysical() const
