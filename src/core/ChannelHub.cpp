@@ -14,6 +14,21 @@ void ChannelHub::subscribe(IVisualPlugin* plugin, const QList<quint16>& channels
     }
 
     unsubscribe(plugin);
+    m_destroyConnections.insert(
+        plugin,
+        connect(plugin, &QObject::destroyed, this, [this, plugin]() {
+            m_wildcardSubscribers.remove(plugin);
+            for (auto it = m_subscriptions.begin(); it != m_subscriptions.end();) {
+                it->remove(plugin);
+                if (it->isEmpty()) {
+                    it = m_subscriptions.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            m_destroyConnections.remove(plugin);
+        }));
+
     if (channels.isEmpty()) {
         m_wildcardSubscribers.insert(plugin);
         return;
@@ -28,6 +43,12 @@ void ChannelHub::unsubscribe(IVisualPlugin* plugin)
 {
     if (!plugin) {
         return;
+    }
+
+    const auto connectionIt = m_destroyConnections.find(plugin);
+    if (connectionIt != m_destroyConnections.end()) {
+        QObject::disconnect(connectionIt.value());
+        m_destroyConnections.erase(connectionIt);
     }
 
     m_wildcardSubscribers.remove(plugin);
