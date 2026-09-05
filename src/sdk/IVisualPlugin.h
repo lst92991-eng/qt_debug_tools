@@ -15,7 +15,7 @@ public:
     ~IVisualPlugin() override = default;
 
     virtual void onChannelData(const DataFrame& frame) = 0;
-    virtual QList<quint16> subscribedChannels() = 0;
+    virtual QList<ChannelId> subscribedChannels() = 0;
     virtual qint64 historyFrom() = 0;
     virtual QString name() const = 0;
 };
