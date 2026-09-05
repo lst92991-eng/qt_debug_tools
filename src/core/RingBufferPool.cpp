@@ -1,230 +1,155 @@
 #include "core/RingBufferPool.h"
-
 #include <QDataStream>
 #include <QFile>
-
+#include <QSaveFile>
 #include <algorithm>
-
+#include <cmath>
+#include <limits>
+#include <utility>
 namespace {
-constexpr quint32 kRingFileMagic = 0x4d434452;
-constexpr quint16 kRingFileVersion = 2;
-constexpr quint16 kOldestSupportedRingFileVersion = 1;
-constexpr quint32 kMaxPersistedChannels = 65'536;
-constexpr quint32 kMaxPersistedCapacity = 1'000'000;
-constexpr quint32 kMaxPersistedSamplesPerChannel = 1'000'000;
+constexpr quint32 Magic = 0x4d434452;
+constexpr quint16 Version = 2;
+bool fail(QString* error, const QString& message) { if (error) *error = message; return false; }
 }
-
 void RingBuffer::push(TimedSample sample)
 {
-    if (capacity <= 0) {
-        return;
-    }
-
+    if (capacity <= 0) return;
     if (data.size() < capacity) {
         data.push_back(sample);
-        sampleCount = data.size();
-        head = data.size() % capacity;
-        oldest_ts = data.isEmpty() ? 0 : data.first().timestamp_us;
-        return;
+        sampleCount = int(data.size());
+        head = sampleCount % capacity;
+        oldest_ts = data.first().timestamp_us;
+    } else {
+        data[head] = sample;
+        head = (head + 1) % capacity;
+        sampleCount = capacity;
+        oldest_ts = data[head].timestamp_us;
     }
-
-    data[head] = sample;
-    head = (head + 1) % capacity;
-    sampleCount = capacity;
-    oldest_ts = data[head].timestamp_us;
 }
-
 QVector<TimedSample> RingBuffer::range(qint64 from_us, qint64 to_us) const
 {
     QVector<TimedSample> result;
-    const int count = std::min(sampleCount, static_cast<int>(data.size()));
-    if (count <= 0) {
-        return result;
-    }
-
+    const int count = std::min(sampleCount, int(data.size()));
+    if (count == 0) return result;
     result.reserve(count);
     for (int i = 0; i < count; ++i) {
-        const int idx = (head - count + i + data.size()) % data.size();
-        const TimedSample sample = data[idx];
-        if (sample.timestamp_us >= from_us && (to_us <= 0 || sample.timestamp_us <= to_us)) {
-            result.push_back(sample);
-        }
+        const int index = (head - count + i + int(data.size())) % int(data.size());
+        const auto& sample = data[index];
+        if (sample.timestamp_us >= from_us && (to_us <= 0 || sample.timestamp_us <= to_us)) result.push_back(sample);
     }
-
     return result;
 }
-
 qint64 RingBuffer::newestTimestamp() const
 {
-    const int count = std::min(sampleCount, static_cast<int>(data.size()));
-    if (count == 0) {
-        return 0;
-    }
-
-    const int idx = (head - 1 + data.size()) % data.size();
-    return data[idx].timestamp_us;
+    if (data.isEmpty()) return 0;
+    return data[(head - 1 + data.size()) % data.size()].timestamp_us;
 }
-
 RingBufferPool::RingBufferPool(int defaultCapacity)
-    : m_defaultCapacity(std::max(1, defaultCapacity))
+    : m_defaultCapacity(std::clamp(defaultCapacity, 1, MaxCapacity)) {}
+bool RingBufferPool::push(ChannelId channelIdx, TimedSample sample)
 {
-}
-
-void RingBufferPool::push(ChannelId channelIdx, TimedSample sample)
-{
+    if (!std::isfinite(sample.value)) return false;
     QWriteLocker locker(&m_lock);
-    RingBuffer& buffer = m_buffers[channelIdx];
-    if (buffer.data.isEmpty() && buffer.sampleCount == 0) {
+    auto it = m_buffers.find(channelIdx);
+    if (it == m_buffers.end()) {
+        if (m_buffers.size() >= MaxChannels || m_totalSamples >= MaxTotalSamples) return false;
+        RingBuffer buffer;
         buffer.capacity = m_defaultCapacity;
+        it = m_buffers.insert(channelIdx, std::move(buffer));
     }
-    buffer.push(sample);
+    const bool grows = it->data.size() < it->capacity;
+    if (grows && m_totalSamples >= MaxTotalSamples) return false;
+    it->push(sample);
+    if (grows) ++m_totalSamples;
+    return true;
 }
-
 QVector<TimedSample> RingBufferPool::replay(ChannelId channelIdx, qint64 from_us) const
 {
     QReadLocker locker(&m_lock);
     const auto it = m_buffers.constFind(channelIdx);
-    if (it == m_buffers.constEnd()) {
-        return {};
-    }
-    return it->range(from_us, 0);
+    return it == m_buffers.constEnd() ? QVector<TimedSample>{} : it->range(from_us, 0);
 }
-
 qint64 RingBufferPool::newestTimestamp(ChannelId channelIdx) const
 {
     QReadLocker locker(&m_lock);
     const auto it = m_buffers.constFind(channelIdx);
     return it == m_buffers.constEnd() ? 0 : it->newestTimestamp();
 }
-
 QList<ChannelId> RingBufferPool::activeChannels() const
 {
     QReadLocker locker(&m_lock);
-    QList<ChannelId> keys = m_buffers.keys();
+    auto keys = m_buffers.keys();
     std::sort(keys.begin(), keys.end());
     return keys;
 }
-
-bool RingBufferPool::saveToFile(const QString& path, QString* errorMessage) const
+bool RingBufferPool::saveToFile(const QString& path, QString* error) const
 {
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        if (errorMessage) {
-            *errorMessage = file.errorString();
-        }
-        return false;
-    }
-
+    if (error) error->clear();
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) return fail(error, file.errorString());
     QReadLocker locker(&m_lock);
     QDataStream out(&file);
     out.setVersion(QDataStream::Qt_6_0);
-    out << kRingFileMagic << kRingFileVersion << static_cast<quint32>(m_buffers.size());
-
-    QList<ChannelId> channels = m_buffers.keys();
+    out << Magic << Version << quint32(m_buffers.size());
+    auto channels = m_buffers.keys();
     std::sort(channels.begin(), channels.end());
     for (ChannelId channel : channels) {
-        const RingBuffer& buffer = m_buffers.value(channel);
-        const QVector<TimedSample> samples = buffer.range(0, 0);
-        out << static_cast<quint64>(channel)
-            << static_cast<quint32>(buffer.capacity)
-            << static_cast<quint32>(samples.size());
-        for (const TimedSample& sample : samples) {
-            out << sample.timestamp_us << sample.value;
-        }
+        const auto it = m_buffers.constFind(channel);
+        const auto samples = it->range(std::numeric_limits<qint64>::min(), 0);
+        out << quint64(channel) << quint32(it->capacity) << quint32(samples.size());
+        for (const auto& sample : samples) out << sample.timestamp_us << sample.value;
     }
-    return out.status() == QDataStream::Ok;
+    if (out.status() != QDataStream::Ok) return fail(error, QStringLiteral("Failed to write history"));
+    if (!file.commit()) return fail(error, file.errorString());
+    return true;
 }
-
-bool RingBufferPool::loadFromFile(const QString& path, QString* errorMessage)
+bool RingBufferPool::loadFromFile(const QString& path, QString* error)
 {
+    if (error) error->clear();
     QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        if (errorMessage) {
-            *errorMessage = file.errorString();
-        }
-        return false;
-    }
-
+    if (!file.open(QIODevice::ReadOnly)) return fail(error, file.errorString());
+    constexpr qint64 MaxFileBytes = 10 + qint64(MaxChannels) * 16 + qint64(MaxTotalSamples) * 16;
+    if (file.size() < 10 || file.size() > MaxFileBytes) return fail(error, QStringLiteral("History file size exceeds supported limits"));
     QDataStream in(&file);
     in.setVersion(QDataStream::Qt_6_0);
-
-    quint32 magic = 0;
+    quint32 magic = 0, channelCount = 0;
     quint16 version = 0;
-    quint32 channelCount = 0;
     in >> magic >> version >> channelCount;
-    if (magic != kRingFileMagic
-        || version < kOldestSupportedRingFileVersion
-        || version > kRingFileVersion) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Unsupported ring buffer file");
-        }
-        return false;
-    }
-    if (channelCount > kMaxPersistedChannels) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Ring buffer file contains too many channels");
-        }
-        return false;
-    }
-
+    if (in.status() != QDataStream::Ok || magic != Magic || version < 1 || version > Version || channelCount > MaxChannels)
+        return fail(error, QStringLiteral("Unsupported or invalid history header"));
     QHash<ChannelId, RingBuffer> loaded;
+    quint64 total = 0;
     for (quint32 i = 0; i < channelCount; ++i) {
         ChannelId channel = 0;
-        if (version == 1) {
-            quint16 legacyChannel = 0;
-            in >> legacyChannel;
-            channel = legacyChannel;
-        } else {
-            quint64 persistedChannel = 0;
-            in >> persistedChannel;
-            channel = persistedChannel;
-        }
-
-        quint32 capacity = 0;
-        quint32 sampleCount = 0;
-        in >> capacity >> sampleCount;
-
-        if (in.status() != QDataStream::Ok
-            || capacity == 0
-            || capacity > kMaxPersistedCapacity
-            || sampleCount > capacity
-            || sampleCount > kMaxPersistedSamplesPerChannel) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral("Invalid ring buffer channel metadata");
-            }
-            return false;
-        }
-
+        if (version == 1) { quint16 legacy = 0; in >> legacy; channel = legacy; }
+        else { in >> channel; }
+        quint32 capacity = 0, count = 0;
+        in >> capacity >> count;
+        total += count;
+        if (in.status() != QDataStream::Ok || capacity == 0 || capacity > MaxCapacity || count > capacity
+            || total > MaxTotalSamples || loaded.contains(channel) || quint64(file.bytesAvailable()) < quint64(count) * 16)
+            return fail(error, QStringLiteral("Invalid history dimensions, duplicate channel, or truncated data"));
         RingBuffer buffer;
-        buffer.capacity = static_cast<int>(capacity);
-        for (quint32 sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
+        buffer.capacity = int(capacity);
+        buffer.data.reserve(int(count));
+        for (quint32 j = 0; j < count; ++j) {
             TimedSample sample;
             in >> sample.timestamp_us >> sample.value;
-            if (in.status() != QDataStream::Ok) {
-                if (errorMessage) {
-                    *errorMessage = QStringLiteral("Failed to read ring buffer samples");
-                }
-                return false;
-            }
+            if (in.status() != QDataStream::Ok || !std::isfinite(sample.value))
+                return fail(error, QStringLiteral("Invalid or truncated history sample"));
             buffer.push(sample);
         }
         loaded.insert(channel, std::move(buffer));
     }
-
-    if (in.status() != QDataStream::Ok) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Failed to read ring buffer file");
-        }
-        return false;
-    }
-
+    if (in.status() != QDataStream::Ok || !file.atEnd()) return fail(error, QStringLiteral("Unexpected history trailing data"));
     QWriteLocker locker(&m_lock);
     m_buffers = std::move(loaded);
+    m_totalSamples = int(total);
     return true;
 }
-
 void RingBufferPool::clear()
 {
     QWriteLocker locker(&m_lock);
     m_buffers.clear();
+    m_totalSamples = 0;
 }
