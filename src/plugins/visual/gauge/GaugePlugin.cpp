@@ -32,9 +32,11 @@ void GaugePlugin::onChannelData(const DataFrame& frame)
             continue;
         }
         const bool isNew = !m_values.contains(sample.index);
+        const QString label = sample.name.isEmpty() ? QStringLiteral("CH%1").arg(sample.index) : sample.name;
+        const bool labelChanged = m_labels.value(sample.index) != label;
         m_values.insert(sample.index, sample.value);
-        m_labels.insert(sample.index, sample.name.isEmpty() ? QStringLiteral("CH%1").arg(sample.index) : sample.name);
-        changed = changed || isNew;
+        m_labels.insert(sample.index, label);
+        changed = changed || isNew || labelChanged;
     }
     if (changed) {
         rebuildSelector();
@@ -42,7 +44,7 @@ void GaugePlugin::onChannelData(const DataFrame& frame)
     update();
 }
 
-QList<quint16> GaugePlugin::subscribedChannels()
+QList<ChannelId> GaugePlugin::subscribedChannels()
 {
     return {};
 }
@@ -71,7 +73,7 @@ void GaugePlugin::paintEvent(QPaintEvent* event)
         return;
     }
 
-    const quint16 channel = selectedChannel();
+    const ChannelId channel = selectedChannel();
     const double value = m_values.value(channel, 0.0);
     const double clamped = std::clamp(value, 0.0, 100.0);
 
@@ -105,10 +107,12 @@ void GaugePlugin::rebuildSelector()
     const QVariant current = m_selector->currentData();
     const QSignalBlocker blocker(m_selector);
     m_selector->clear();
-    QList<quint16> channels = m_values.keys();
+    QList<ChannelId> channels = m_values.keys();
     std::sort(channels.begin(), channels.end());
-    for (quint16 channel : channels) {
-        m_selector->addItem(m_labels.value(channel, QStringLiteral("CH%1").arg(channel)), channel);
+    for (ChannelId channel : channels) {
+        m_selector->addItem(
+            m_labels.value(channel, QStringLiteral("CH%1").arg(channel)),
+            QVariant::fromValue<quint32>(channel));
     }
     const int idx = m_selector->findData(current);
     if (idx >= 0) {
@@ -116,7 +120,7 @@ void GaugePlugin::rebuildSelector()
     }
 }
 
-quint16 GaugePlugin::selectedChannel() const
+ChannelId GaugePlugin::selectedChannel() const
 {
-    return static_cast<quint16>(m_selector->currentData().toUInt());
+    return m_selector->currentData().toUInt();
 }
