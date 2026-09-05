@@ -21,7 +21,7 @@ public:
     void publish(const DataFrame& frame);
     void sendCommand(const QVariantMap& command);
     QVariantMap channelMetadata() const;
-    void setChannelMetadata(quint16 channel, const QString& name, const QString& unit);
+    void setChannelMetadata(ChannelId channel, const QString& name, const QString& unit);
     void setChannelMetadata(const QVariantMap& metadata);
 
 signals:
