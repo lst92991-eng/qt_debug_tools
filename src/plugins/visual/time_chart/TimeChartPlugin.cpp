@@ -56,7 +56,7 @@ void TimeChartPlugin::onChannelData(const DataFrame& frame)
         for (ChannelId channel : channels) {
             m_channelSelector->addItem(
                 m_labels.value(channel, QStringLiteral("CH%1").arg(channel)),
-                QVariant::fromValue<quint32>(channel));
+                QVariant::fromValue<qulonglong>(channel));
         }
         const int idx = m_channelSelector->findData(current);
         if (idx >= 0) {
@@ -201,7 +201,7 @@ QList<ChannelId> TimeChartPlugin::visibleChannels() const
 {
     const QVariant selected = m_channelSelector->currentData();
     if (selected.isValid()) {
-        return {selected.toUInt()};
+        return {selected.toULongLong()};
     }
 
     QList<ChannelId> channels = m_series.keys();
