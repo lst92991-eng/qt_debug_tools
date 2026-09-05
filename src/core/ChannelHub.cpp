@@ -7,7 +7,7 @@ ChannelHub::ChannelHub(QObject* parent)
 {
 }
 
-void ChannelHub::subscribe(IVisualPlugin* plugin, const QList<quint16>& channels)
+void ChannelHub::subscribe(IVisualPlugin* plugin, const QList<ChannelId>& channels)
 {
     if (!plugin) {
         return;
@@ -34,7 +34,7 @@ void ChannelHub::subscribe(IVisualPlugin* plugin, const QList<quint16>& channels
         return;
     }
 
-    for (quint16 channel : channels) {
+    for (ChannelId channel : channels) {
         m_subscriptions[channel].insert(plugin);
     }
 }
