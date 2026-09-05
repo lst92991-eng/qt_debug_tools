@@ -63,7 +63,14 @@ function(mcd_add_plugin target category)
     target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(${target} PRIVATE mcd_sdk Qt6::Core Qt6::Widgets)
 
-    set(plugin_output_dir "${MCD_OUTPUT_DIR}/$<CONFIG>/plugins/${category}")
+    # Multi-config generators place the app in bin/<CONFIG>; single-config
+    # generators place it directly in bin. Keep plugins beside the app in both cases.
+    if(CMAKE_CONFIGURATION_TYPES)
+        set(plugin_output_dir "${MCD_OUTPUT_DIR}/$<CONFIG>/plugins/${category}")
+    else()
+        set(plugin_output_dir "${MCD_OUTPUT_DIR}/plugins/${category}")
+    endif()
+
     set_target_properties(${target} PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${plugin_output_dir}"
         RUNTIME_OUTPUT_DIRECTORY "${plugin_output_dir}"
